@@ -124,6 +124,53 @@ def buy_orders(orders: list[dict], hub: Hub, needed: int) -> list[dict]:
     return buys
 
 
+def ladder_from_orders(
+    orders: list[dict], hub: Hub, side: OrderSide
+) -> list[tuple[str, int, int]]:
+    """Очищенная лестница стакана для хранения в базе (ROADMAP, этап 7).
+
+    Возвращает уровни (цена строкой, доступный объём, min_volume), уже
+    отфильтрованные и отсортированные под свою сторону.
+
+    Что сделано здесь и не переделывается при чтении: отбор по станции и
+    радиусу, выброс мёртвых ордеров и выбросов по медиане, сортировка.
+    Всё это от объёма пользователя не зависит.
+
+    Что **не** сделано здесь: отсечение buy-ордеров по `min_volume` и сам VWAP.
+    И то, и другое зависит от нужного количества, а сборщик его не знает —
+    поэтому min_volume едет в базу третьим числом каждого уровня.
+
+    Цена — строкой: во float 2750.10 хранится с хвостом, а нам эти копейки
+    ещё считать.
+    """
+    if side is OrderSide.BUY:
+        # needed=0 отключил бы фильтр по min_volume целиком, поэтому берём
+        # сам фильтр отдельно: здесь нужен только отбор по радиусу и очистка
+        system_id = hub_system_id(orders, hub)
+        book = [
+            o
+            for o in _alive(orders, is_buy=True)
+            if (
+                o.get("range") == RANGE_REGION
+                or o.get("location_id") == hub.station_id
+                or (system_id is not None and o.get("system_id") == system_id)
+            )
+        ]
+        book = drop_outliers(book)
+        book.sort(key=lambda o: float(o["price"]), reverse=True)
+    else:
+        book = sell_orders(orders, hub)
+
+    return [
+        (
+            format(float(o["price"]), ".2f"),
+            int(o["volume_remain"]),
+            int(o.get("min_volume", 1)),
+        )
+        for o in book
+    ]
+
+
 def vwap(orders: list[dict], needed: int) -> tuple[float | None, int]:
     """Средневзвешенная цена по отсортированной книге на needed юнитов (ESI §4).
 

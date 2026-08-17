@@ -14,6 +14,7 @@
 """
 
 import json
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -106,10 +107,17 @@ class MarketSnapshot(Base):
     collected_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     # Момент, после которого ESI отдаст свежие данные — из заголовка expires
     expires_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
-    # JSON вида [["2750.00", 12000], ...]: цена строкой, объём целым
+    # JSON вида [["2750.00", 12000, 1], ...]: цена строкой, объём и min_volume целыми.
+    #
+    # min_volume хранится не для красоты: buy-ордер с min_volume больше нужного
+    # количества исполнить нельзя (ESI §4), а нужное количество знает только
+    # пользователь. Без этого поля фильтр было бы нечем воспроизвести при чтении.
     ladder: Mapped[str] = mapped_column(Text)
     total_volume: Mapped[int] = mapped_column(BigInteger, default=0)
     order_count: Mapped[int] = mapped_column(Integer, default=0)
+    # ETag последнего ответа ESI. В следующий раз уходит в If-None-Match:
+    # ответ 304 стоит вдвое дешевле по токенам рейт-лимита (ESI §2).
+    etag: Mapped[str | None] = mapped_column(String(128), default=None)
     run_id: Mapped[int | None] = mapped_column(
         ForeignKey("collection_run.id", ondelete="SET NULL"), default=None
     )
@@ -161,14 +169,25 @@ class UserFreightRate(Base):
 # --- Лестница стакана: формат хранения ---
 
 
-def dump_ladder(levels: list[tuple[Decimal | float | str, int]]) -> str:
-    """Сериализует лестницу в JSON. Цена — строкой, чтобы не потерять копейки."""
+def dump_ladder(levels: Iterable[tuple[Decimal | float | str, int, int]]) -> str:
+    """Сериализует лестницу в JSON. Цена — строкой, чтобы не потерять копейки.
+
+    Уровень — тройка (цена, доступный объём, min_volume). Порядок уровней
+    значимый: он уже отсортирован под свою сторону стакана и при чтении
+    пересортировке не подлежит.
+    """
     return json.dumps(
-        [[str(Decimal(str(price))), int(volume)] for price, volume in levels],
+        [
+            [str(Decimal(str(price))), int(volume), int(min_volume)]
+            for price, volume, min_volume in levels
+        ],
         separators=(",", ":"),
     )
 
 
-def load_ladder(raw: str) -> list[tuple[Decimal, int]]:
+def load_ladder(raw: str) -> list[tuple[Decimal, int, int]]:
     """Читает лестницу обратно. Цена возвращается Decimal, а не float."""
-    return [(Decimal(price), int(volume)) for price, volume in json.loads(raw)]
+    return [
+        (Decimal(price), int(volume), int(min_volume))
+        for price, volume, min_volume in json.loads(raw)
+    ]

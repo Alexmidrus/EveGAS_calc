@@ -155,7 +155,7 @@ class TestRoundTrip:
                     side="sell",
                     collected_at=collected,
                     expires_at=collected + timedelta(minutes=5),
-                    ladder=dump_ladder([("2750.00", 12_000), ("2755.50", 3_000)]),
+                    ladder=dump_ladder([("2750.00", 12_000, 1), ("2755.50", 3_000, 100)]),
                     total_volume=15_000,
                     order_count=2,
                 )
@@ -165,8 +165,8 @@ class TestRoundTrip:
             assert row.hub_key == "jita"
             assert row.total_volume == 15_000
             assert load_ladder(row.ladder) == [
-                (Decimal("2750.00"), 12_000),
-                (Decimal("2755.50"), 3_000),
+                (Decimal("2750.00"), 12_000, 1),
+                (Decimal("2755.50"), 3_000, 100),
             ]
 
     def test_freight_rate_is_exact(self, engine, account):
@@ -214,19 +214,19 @@ class TestLadderFormat:
 
     def test_kopecks_survive(self):
         """0.1 + 0.2 во float даёт 0.30000000000000004. Здесь такого быть не может."""
-        raw = dump_ladder([("1234567.89", 1)])
-        assert load_ladder(raw) == [(Decimal("1234567.89"), 1)]
+        raw = dump_ladder([("1234567.89", 1, 1)])
+        assert load_ladder(raw) == [(Decimal("1234567.89"), 1, 1)]
 
     def test_accepts_decimal_and_float(self):
-        raw = dump_ladder([(Decimal("100.50"), 5), (100.25, 7)])
-        assert load_ladder(raw) == [(Decimal("100.50"), 5), (Decimal("100.25"), 7)]
+        raw = dump_ladder([(Decimal("100.50"), 5, 1), (100.25, 7, 50)])
+        assert load_ladder(raw) == [(Decimal("100.50"), 5, 1), (Decimal("100.25"), 7, 50)]
 
     def test_empty(self):
         assert load_ladder(dump_ladder([])) == []
 
     def test_json_is_compact(self):
         """Лестниц будет 270 штук на цикл — лишние пробелы это лишние байты."""
-        assert " " not in dump_ladder([("2750.00", 12_000)])
+        assert " " not in dump_ladder([("2750.00", 12_000, 1)])
 
 
 class TestLatestSnapshotQuery:
@@ -240,11 +240,11 @@ class TestLatestSnapshotQuery:
                 [
                     MarketSnapshot(
                         hub_key="jita", type_id=62406, side="sell",
-                        collected_at=older, ladder=dump_ladder([("3000.00", 10)]),
+                        collected_at=older, ladder=dump_ladder([("3000.00", 10, 1)]),
                     ),
                     MarketSnapshot(
                         hub_key="jita", type_id=62406, side="sell",
-                        collected_at=newer, ladder=dump_ladder([("2750.00", 10)]),
+                        collected_at=newer, ladder=dump_ladder([("2750.00", 10, 1)]),
                     ),
                 ]
             )
