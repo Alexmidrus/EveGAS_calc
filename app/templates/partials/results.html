@@ -1,0 +1,117 @@
+{# Блок 3: сводка + таблица (SPEC §5). Возвращается на HTMX-запрос POST /calculate. #}
+{% if errors %}
+<div class="errors">
+  <p>Расчёт не выполнен:</p>
+  <ul>
+    {% for error in errors %}<li>{{ error }}</li>{% endfor %}
+  </ul>
+</div>
+{% elif not result.scenarios %}
+<div class="empty">
+  {% if inp.sell_only %}
+  <p>Недостаточно данных: нужна ставка доставки и хотя бы одна цена sell —
+    buy-сценарии скрыты фильтром «только sell».</p>
+  {% else %}
+  <p>Недостаточно данных: нужна ставка доставки и хотя бы одна цена.</p>
+  {% endif %}
+  {% if result.skipped_hubs %}
+  <ul class="notes">
+    {% for hub_key in result.skipped_hubs %}
+    <li>{{ hub_names[hub_key] }}: не задана доставка</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</div>
+{% else %}
+
+{# --- Сводка (SPEC §5.1) --- #}
+<div class="summary">
+  <div class="card">
+    <span class="big">{{ result.summary.best.isk_per_unit|num(2) }}</span> ISK/юнит
+    <small>лучший вариант: {{ hub_names[result.summary.best.hub_key] }},
+      {{ form_labels[result.summary.best.form] }}, {{ result.summary.best.side.value }}</small>
+  </div>
+  <div class="card">
+    <span class="big">{{ result.summary.savings_vs_worst|compact }}</span> ISK
+    <small>экономия лучшего против худшего на всей партии</small>
+  </div>
+  {% if result.summary.loss_units is not none %}
+  <div class="card">
+    <span class="big">{{ result.summary.loss_units|num }}</span> юнитов сгорит
+    <small>потери при разжатии {{ result.summary.loss_pct|pct }};
+      куплено сжатого: {{ result.compressed_qty|num }}</small>
+  </div>
+  {% endif %}
+</div>
+
+{# --- Основная таблица (SPEC §5.2) --- #}
+<table class="results-table">
+  <thead>
+    <tr>
+      <th>Хаб</th>
+      <th>Что берём</th>
+      <th class="num">Цена</th>
+      <th class="num">Купить</th>
+      <th class="num">Объём, м³</th>
+      <th class="num">Доставка</th>
+      <th class="num">Итого</th>
+      <th class="num">ISK/юнит</th>
+      <th class="num">Δ</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for s in result.scenarios %}
+    <tr class="{{ 'best' if loop.first }}{{ ' warn' if s.warnings }}">
+      <td>{{ hub_names[s.hub_key] }}{% if warning_codes.PRICE_OUTLIER in s.warnings %} *{% endif %}{% if warning_codes.SHALLOW_BOOK in s.warnings %} †{% endif %}</td>
+      <td>{{ form_labels[s.form] }} · {{ s.side.value }}</td>
+      <td class="num">{{ s.price|num }}</td>
+      <td class="num">{{ s.qty|num }}{% if warning_codes.SHALLOW_BOOK in s.warnings %}
+        <small class="shallow">в стакане только {{ s.available_qty|num }}</small>{% endif %}</td>
+      <td class="num">{{ s.volume_m3|num }}</td>
+      <td class="num">{{ s.freight_volume|num }}</td>
+      <td class="num">{{ s.total|num }}</td>
+      <td class="num">{{ s.isk_per_unit|num(2) }}</td>
+      <td class="num">{% if s.delta_pct is none %}—{% else %}+{{ s.delta_pct|num(1) }}%{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+{# --- Сноски: сбор, предупреждения, выпавшие хабы --- #}
+<ul class="notes">
+  {% if inp.sell_only %}
+  <li>Показаны только sell-сценарии: buy-ордер — это заявка, она может не исполниться.
+    Снимите галочку «только sell», чтобы увидеть все варианты.</li>
+  {% endif %}
+  {% if inp.collateral_mode.value == 'auto' %}
+  <li>Сбор за обеспечение — 0.5% от стоимости закупки каждой строки;
+    {{ 'включён' if inp.include_collateral_fee else 'посчитан, но не включён' }} в «Итого».</li>
+  {% elif result.scenarios[0].collateral_fee > 0 %}
+  <li>Сбор за обеспечение: {{ result.scenarios[0].collateral_fee|num }} ISK на сценарий;
+    {{ 'включён' if inp.include_collateral_fee else 'посчитан, но не включён' }} в «Итого».
+    Колонка «Доставка» — без сбора.</li>
+  {% endif %}
+  {% if has_outliers %}
+  <li>* Цена сильно выбивается — проверьте.</li>
+  {% endif %}
+  {% if has_shallow %}
+  <li>† Глубины стакана не хватает на нужный объём: цена посчитана по тому, что есть,
+    остальное придётся добирать дороже или в другом хабе. Глубина известна только
+    для цен, подтянутых из ESI.</li>
+  {% endif %}
+  {% for hub_key in result.skipped_hubs %}
+  <li>{{ hub_names[hub_key] }}: не задана доставка</li>
+  {% endfor %}
+</ul>
+
+{# --- Точки безубыточности (SPEC §5.3) --- #}
+{% if result.breakevens %}
+<div class="breakevens">
+  {% for b in result.breakevens %}
+  <p>{{ hub_names[b.hub_key] }}: сжатый выгоднее сырого, пока стоит дешевле
+    <strong>{{ b.price|num }} ISK</strong></p>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% endif %}

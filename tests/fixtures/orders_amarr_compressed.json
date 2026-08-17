@@ -1,0 +1,44 @@
+[
+  {
+    "order_id": 5100000001,
+    "type_id": 62406,
+    "location_id": 60008494,
+    "system_id": 39908494,
+    "is_buy_order": false,
+    "price": 2300.0,
+    "volume_remain": 60000,
+    "volume_total": 60000,
+    "min_volume": 1,
+    "range": "region",
+    "duration": 90,
+    "issued": "2026-08-14T05:00:00Z"
+  },
+  {
+    "order_id": 5100000002,
+    "type_id": 62406,
+    "location_id": 60008494,
+    "system_id": 39908494,
+    "is_buy_order": true,
+    "price": 2050.0,
+    "volume_remain": 70000,
+    "volume_total": 70000,
+    "min_volume": 1,
+    "range": "station",
+    "duration": 90,
+    "issued": "2026-08-14T05:00:00Z"
+  },
+  {
+    "order_id": 5100000003,
+    "type_id": 62406,
+    "location_id": 99900011,
+    "system_id": 39908494,
+    "is_buy_order": true,
+    "price": 2075.0,
+    "volume_remain": 5000,
+    "volume_total": 5000,
+    "min_volume": 1,
+    "range": "solarsystem",
+    "duration": 90,
+    "issued": "2026-08-14T05:10:00Z"
+  }
+]

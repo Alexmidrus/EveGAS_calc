@@ -1,0 +1,66 @@
+"""Игровые константы.
+
+Источник всех чисел — docs/DOMAIN.md. Не менять без сверки с ним.
+Модуль не импортирует ничего: его читают models.py и catalog.py.
+"""
+
+# --- Разжатие (DOMAIN §1) ---
+
+# eta = ETA_BASE + бонус структуры + GDE_BONUS_PER_LEVEL * уровень навыка
+ETA_BASE = 0.80
+
+# Бонусы структур к эффективности разжатия. Ключи совпадают со StructureType в models.py.
+STRUCTURE_BONUS: dict[str, float] = {
+    "upwell": 0.00,   # Astrahus и прочие Upwell без реф-бонуса
+    "athanor": 0.04,
+    "tatara": 0.10,
+}
+
+GDE_BONUS_PER_LEVEL = 0.01  # навык Gas Decompression Efficiency
+GDE_MIN_LEVEL = 0
+GDE_MAX_LEVEL = 5
+
+# --- Сжатие (DOMAIN §1) ---
+
+COMPRESSION_QUANTITY_RATIO = 1   # юниты 1:1, без потерь
+# Объём 10:1. Значение продублировано в data/gases.json ("compression.volume_ratio");
+# catalog.py сверяет оба при загрузке и падает при расхождении.
+COMPRESSION_VOLUME_RATIO = 10
+
+# --- Логистика (DOMAIN §4) ---
+
+COLLATERAL_FEE_RATE = 0.005  # сбор 0.5% от суммы обеспечения, одинаков на всех маршрутах
+
+# --- Эвристики интерфейса (SPEC §6) ---
+
+# «Цена отличается от медианы по остальным хабам больше чем в 3 раза» → предупреждение
+PRICE_OUTLIER_FACTOR = 3.0
+
+# --- Эвристики разбора стакана (ESI §4) ---
+
+# Ордер выбрасывается из книги, если его цена отличается от медианы книги
+# больше чем в 100 раз: продажа юнита за 0.01 ISK и «стены» по конским ценам.
+ORDERBOOK_OUTLIER_FACTOR = 100.0
+
+# --- Трейд-хабы (DOMAIN §3) ---
+
+# Порядок кортежа — порядок строк в интерфейсе, от крупнейшего к мельчайшему.
+# ID выверены по DOMAIN.md, не выдумывать и не «исправлять» без сверки.
+#
+# system_id нужен только для отбора buy-ордеров с радиусом (ESI §3.2). В DOMAIN.md
+# его нет, и выдумывать его нельзя: у четырёх хабов поле остаётся None. Для Jita
+# значение взято из примера ответа ESI в docs/ESI.md §2 (там ордер на станции
+# 60003760 отдан с system_id 30000142). Недостающие system_id orderbook.py
+# определяет из самого стакана — по ордеру, стоящему на станции хаба.
+HUBS: tuple[dict[str, str | int | None], ...] = (
+    {"key": "jita", "name": "Jita", "region_id": 10000002, "station_id": 60003760,
+     "system_id": 30000142},
+    {"key": "amarr", "name": "Amarr", "region_id": 10000043, "station_id": 60008494,
+     "system_id": None},
+    {"key": "dodixie", "name": "Dodixie", "region_id": 10000032, "station_id": 60011866,
+     "system_id": None},
+    {"key": "rens", "name": "Rens", "region_id": 10000030, "station_id": 60004588,
+     "system_id": None},
+    {"key": "hek", "name": "Hek", "region_id": 10000042, "station_id": 60005686,
+     "system_id": None},
+)

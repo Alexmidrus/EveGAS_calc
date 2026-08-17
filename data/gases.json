@@ -1,0 +1,253 @@
+{
+  "version": "2026-08-14",
+  "note": "Сгенерировано tools/build_gases.py из SDE (см. README, раздел «Обновление справочника»). Пары сырой/сжатый взяты из typeMaterials: у сжатого типа ровно один материал в количестве 1 — соответствующий сырой газ. Вручную не править и ID не выдумывать: перезапусти скрипт.",
+  "compression": {
+    "quantity_ratio": 1,
+    "volume_ratio": 10
+  },
+  "gases": [
+    {
+      "key": "fullerite_c50",
+      "name": "Fullerite-C50",
+      "family": "fullerite",
+      "volume_raw": 1.0,
+      "volume_compressed": 0.1,
+      "raw_type_id": 30370,
+      "compressed_type_id": 62399
+    },
+    {
+      "key": "fullerite_c60",
+      "name": "Fullerite-C60",
+      "family": "fullerite",
+      "volume_raw": 1.0,
+      "volume_compressed": 0.1,
+      "raw_type_id": 30371,
+      "compressed_type_id": 62397
+    },
+    {
+      "key": "fullerite_c70",
+      "name": "Fullerite-C70",
+      "family": "fullerite",
+      "volume_raw": 1.0,
+      "volume_compressed": 0.1,
+      "raw_type_id": 30372,
+      "compressed_type_id": 62398
+    },
+    {
+      "key": "fullerite_c28",
+      "name": "Fullerite-C28",
+      "family": "fullerite",
+      "volume_raw": 2.0,
+      "volume_compressed": 0.2,
+      "raw_type_id": 30375,
+      "compressed_type_id": 62402
+    },
+    {
+      "key": "fullerite_c72",
+      "name": "Fullerite-C72",
+      "family": "fullerite",
+      "volume_raw": 2.0,
+      "volume_compressed": 0.2,
+      "raw_type_id": 30373,
+      "compressed_type_id": 62403
+    },
+    {
+      "key": "fullerite_c84",
+      "name": "Fullerite-C84",
+      "family": "fullerite",
+      "volume_raw": 2.0,
+      "volume_compressed": 0.2,
+      "raw_type_id": 30374,
+      "compressed_type_id": 62400
+    },
+    {
+      "key": "fullerite_c32",
+      "name": "Fullerite-C32",
+      "family": "fullerite",
+      "volume_raw": 5.0,
+      "volume_compressed": 0.5,
+      "raw_type_id": 30376,
+      "compressed_type_id": 62404
+    },
+    {
+      "key": "fullerite_c320",
+      "name": "Fullerite-C320",
+      "family": "fullerite",
+      "volume_raw": 5.0,
+      "volume_compressed": 0.5,
+      "raw_type_id": 30377,
+      "compressed_type_id": 62406
+    },
+    {
+      "key": "fullerite_c540",
+      "name": "Fullerite-C540",
+      "family": "fullerite",
+      "volume_raw": 10.0,
+      "volume_compressed": 1.0,
+      "raw_type_id": 30378,
+      "compressed_type_id": 62405
+    },
+    {
+      "key": "amber_mykoserocin",
+      "name": "Amber Mykoserocin",
+      "family": "mykoserocin",
+      "volume_raw": 10.0,
+      "volume_compressed": 1.0,
+      "raw_type_id": 28694,
+      "compressed_type_id": 62377
+    },
+    {
+      "key": "azure_mykoserocin",
+      "name": "Azure Mykoserocin",
+      "family": "mykoserocin",
+      "volume_raw": 10.0,
+      "volume_compressed": 1.0,
+      "raw_type_id": 28695,
+      "compressed_type_id": 62379
+    },
+    {
+      "key": "celadon_mykoserocin",
+      "name": "Celadon Mykoserocin",
+      "family": "mykoserocin",
+      "volume_raw": 10.0,
+      "volume_compressed": 1.0,
+      "raw_type_id": 28696,
+      "compressed_type_id": 62380
+    },
+    {
+      "key": "golden_mykoserocin",
+      "name": "Golden Mykoserocin",
+      "family": "mykoserocin",
+      "volume_raw": 10.0,
+      "volume_compressed": 1.0,
+      "raw_type_id": 28697,
+      "compressed_type_id": 62381
+    },
+    {
+      "key": "lime_mykoserocin",
+      "name": "Lime Mykoserocin",
+      "family": "mykoserocin",
+      "volume_raw": 10.0,
+      "volume_compressed": 1.0,
+      "raw_type_id": 28698,
+      "compressed_type_id": 62382
+    },
+    {
+      "key": "malachite_mykoserocin",
+      "name": "Malachite Mykoserocin",
+      "family": "mykoserocin",
+      "volume_raw": 10.0,
+      "volume_compressed": 1.0,
+      "raw_type_id": 28699,
+      "compressed_type_id": 62383
+    },
+    {
+      "key": "vermillion_mykoserocin",
+      "name": "Vermillion Mykoserocin",
+      "family": "mykoserocin",
+      "volume_raw": 10.0,
+      "volume_compressed": 1.0,
+      "raw_type_id": 28700,
+      "compressed_type_id": 62384
+    },
+    {
+      "key": "viridian_mykoserocin",
+      "name": "Viridian Mykoserocin",
+      "family": "mykoserocin",
+      "volume_raw": 10.0,
+      "volume_compressed": 1.0,
+      "raw_type_id": 28701,
+      "compressed_type_id": 62385
+    },
+    {
+      "key": "amber_cytoserocin",
+      "name": "Amber Cytoserocin",
+      "family": "cytoserocin",
+      "volume_raw": 10.0,
+      "volume_compressed": 1.0,
+      "raw_type_id": 25268,
+      "compressed_type_id": 62396
+    },
+    {
+      "key": "azure_cytoserocin",
+      "name": "Azure Cytoserocin",
+      "family": "cytoserocin",
+      "volume_raw": 10.0,
+      "volume_compressed": 1.0,
+      "raw_type_id": 25279,
+      "compressed_type_id": 62386
+    },
+    {
+      "key": "celadon_cytoserocin",
+      "name": "Celadon Cytoserocin",
+      "family": "cytoserocin",
+      "volume_raw": 10.0,
+      "volume_compressed": 1.0,
+      "raw_type_id": 25275,
+      "compressed_type_id": 62387
+    },
+    {
+      "key": "golden_cytoserocin",
+      "name": "Golden Cytoserocin",
+      "family": "cytoserocin",
+      "volume_raw": 10.0,
+      "volume_compressed": 1.0,
+      "raw_type_id": 25273,
+      "compressed_type_id": 62390
+    },
+    {
+      "key": "lime_cytoserocin",
+      "name": "Lime Cytoserocin",
+      "family": "cytoserocin",
+      "volume_raw": 10.0,
+      "volume_compressed": 1.0,
+      "raw_type_id": 25277,
+      "compressed_type_id": 62391
+    },
+    {
+      "key": "malachite_cytoserocin",
+      "name": "Malachite Cytoserocin",
+      "family": "cytoserocin",
+      "volume_raw": 10.0,
+      "volume_compressed": 1.0,
+      "raw_type_id": 25276,
+      "compressed_type_id": 62392
+    },
+    {
+      "key": "vermillion_cytoserocin",
+      "name": "Vermillion Cytoserocin",
+      "family": "cytoserocin",
+      "volume_raw": 10.0,
+      "volume_compressed": 1.0,
+      "raw_type_id": 25278,
+      "compressed_type_id": 62393
+    },
+    {
+      "key": "viridian_cytoserocin",
+      "name": "Viridian Cytoserocin",
+      "family": "cytoserocin",
+      "volume_raw": 10.0,
+      "volume_compressed": 1.0,
+      "raw_type_id": 25274,
+      "compressed_type_id": 62394
+    },
+    {
+      "key": "chartreuse_cytoserocin",
+      "name": "Chartreuse Cytoserocin",
+      "family": "cytoserocin",
+      "volume_raw": 10.0,
+      "volume_compressed": 1.0,
+      "raw_type_id": 28630,
+      "compressed_type_id": 62388
+    },
+    {
+      "key": "gamboge_cytoserocin",
+      "name": "Gamboge Cytoserocin",
+      "family": "cytoserocin",
+      "volume_raw": 10.0,
+      "volume_compressed": 1.0,
+      "raw_type_id": 28629,
+      "compressed_type_id": 62389
+    }
+  ]
+}

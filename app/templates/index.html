@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>gascalc — калькулятор закупки газа</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <h1>gascalc</h1>
+  <p class="tagline">Где сегодня выгоднее купить газ: сырой против сжатого, пять хабов, доставка учтена.</p>
+
+  {# Автопересчёт (SPEC §2). События слушаются на форме, поэтому переживают
+     подмену сетки через HTMX.
+
+     input, а не keyup: это ровно «значение изменилось», и он ловит вставку
+     мышью, автозаполнение и стрелки числового поля, которых keyup не видит.
+     Задержка 400 мс стоит на обоих событиях — и чтобы не слать запрос на каждую
+     цифру, и чтобы пара input+change от одного чекбокса схлопнулась в один
+     запрос: htmx сбрасывает таймер на каждом событии. Кнопка «Посчитать» остаётся. #}
+  <form id="calc-form" hx-post="/calculate" hx-target="#results" hx-swap="innerHTML"
+        hx-trigger="submit, input delay:400ms, change delay:400ms" autocomplete="off">
+
+    {# --- Блок 1. Параметры расчёта (SPEC §3) --- #}
+    <fieldset class="params">
+      <legend>Параметры</legend>
+      <div class="params-grid">
+        <label>Газ
+          <select name="gas" id="gas-select">
+            {% for family, gas_list in gases_by_family.items() %}
+            <optgroup label="{{ family_labels[family] }}">
+              {% for gas in gas_list %}
+              <option value="{{ gas.key }}" data-volumes="{{ volume_labels[gas.key] }}"
+                      {% if gas.key == defaults.gas %}selected{% endif %}>{{ gas.name }}</option>
+              {% endfor %}
+            </optgroup>
+            {% endfor %}
+          </select>
+          <small id="gas-volumes">{{ volume_labels[defaults.gas] }}</small>
+        </label>
+
+        <label>Нужно юнитов сырого
+          <input type="number" name="n_units" value="{{ defaults.n_units }}" min="1" step="1" required>
+        </label>
+
+        <label>Тип структуры
+          <select name="structure" id="structure-select">
+            {% for structure, label in structure_labels.items() %}
+            <option value="{{ structure.value }}"
+                    {% if structure.value == defaults.structure %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+
+        <label>Навык Gas Decompression Efficiency
+          <select name="gde_level" id="gde-select">
+            {% for level in gde_levels %}
+            <option value="{{ level }}" {% if level == defaults.gde_level %}selected{% endif %}>{{ level }}</option>
+            {% endfor %}
+          </select>
+          <small>Разжатие: <strong id="eta-value" data-eta-map='{{ eta_map_json }}'>{{ initial_eta_pct }}</strong>%</small>
+        </label>
+
+        <label>Брокерская комиссия, %
+          <input type="number" name="broker_fee" value="{{ defaults.broker_pct }}" min="0" max="5" step="any">
+        </label>
+
+        <fieldset class="collateral">
+          <legend>Обеспечение</legend>
+          <label><input type="radio" name="collateral_mode" value="manual" checked> сумма вручную</label>
+          <label><input type="radio" name="collateral_mode" value="auto"> = стоимости закупки</label>
+          <label>Сумма, ISK
+            <input type="text" inputmode="numeric" name="collateral_manual" id="collateral-manual" value="0">
+          </label>
+          <label><input type="checkbox" name="include_collateral"> включать обеспечение в итог</label>
+        </fieldset>
+      </div>
+      <button type="button" id="reset-settings">Сбросить настройки</button>
+    </fieldset>
+
+    {# --- Блок 2. Сетка цен 5×5 (SPEC §4) --- #}
+    <fieldset class="prices">
+      <legend>Цены по хабам</legend>
+      <p class="hint">Пустая ячейка — сценарий не участвует. Без ставки доставки хаб выпадает целиком.</p>
+      <p class="hint">Ручной ввод — мастер, ESI — черновик: подтянутые цены показаны приглушённо
+        и перебиваются вводом. Ставки доставки подтяжка не трогает.</p>
+      <button type="button" class="fetch" id="fetch-prices"
+              hx-post="/fetch-prices" hx-include="#calc-form"
+              hx-target="#price-grid" hx-swap="innerHTML"
+              hx-indicator="#fetch-indicator">Подтянуть цены из ESI</button>
+      <span id="fetch-indicator" class="indicator">запрашиваю ESI…</span>
+      <div id="price-grid">
+        {% include "partials/prices.html" %}
+      </div>
+    </fieldset>
+
+    <div class="actions">
+      <button type="submit" class="calculate">Посчитать</button>
+      {# Фильтр результата (SPEC §5.4): buy-ордер — заявка, а не покупка #}
+      <label class="filter"><input type="checkbox" name="sell_only" id="sell-only">
+        только sell</label>
+    </div>
+  </form>
+
+  {# --- Блок 3. Результат: заполняется HTMX-ответом POST /calculate --- #}
+  <div id="results"></div>
+
+  <script src="{{ url_for('static', filename='htmx.min.js') }}"></script>
+  <script src="{{ url_for('static', filename='settings.js') }}"></script>
+</body>
+</html>

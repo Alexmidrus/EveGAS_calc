@@ -1,0 +1,7 @@
+Flask[async]>=3.0
+asgiref>=3.8      # async-режим Flask, приходит и транзитом через Flask[async]
+httpx>=0.27
+waitress>=3.0
+
+# dev
+pytest>=8.0

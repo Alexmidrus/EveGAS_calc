@@ -1,0 +1,119 @@
+/* Минимальное оформление (SPEC §9): системный шрифт, таблицы с рамками,
+   две подсветки. Дизайн — отдельная задача после того, как логика заработает. */
+
+:root { color-scheme: only light; } /* цвета в файле светлые; тёмная тема — задача этапа дизайна */
+
+body {
+  font-family: system-ui, sans-serif;
+  margin: 1.5rem auto;
+  max-width: 72rem;
+  padding: 0 1rem;
+  color: #1a1a1a;
+  background: #fff;
+}
+
+h1 { margin-bottom: 0.25rem; }
+.tagline { color: #555; margin-top: 0; }
+
+/* --- Форма --- */
+
+fieldset {
+  border: 1px solid #ccc;
+  margin-bottom: 1rem;
+  padding: 0.75rem 1rem;
+}
+legend { font-weight: 600; padding: 0 0.4rem; }
+
+.params-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem 2rem;
+  align-items: flex-start;
+}
+.params-grid > label { display: flex; flex-direction: column; gap: 0.25rem; }
+.params-grid small { color: #555; }
+
+.collateral { margin: 0; }
+.collateral label { display: block; margin: 0.25rem 0; }
+.collateral input[type="text"] { width: 11em; }
+
+input[type="number"] { width: 9em; }
+input, select { font: inherit; padding: 0.2rem 0.35rem; }
+input:disabled { background: #eee; color: #888; }
+
+.hint { color: #555; margin: 0.25rem 0 0.5rem; }
+
+button {
+  font: inherit;
+  padding: 0.35rem 1rem;
+  cursor: pointer;
+}
+button.calculate { font-weight: 600; padding: 0.5rem 2rem; }
+#reset-settings { margin-top: 0.75rem; }
+
+.actions { display: flex; align-items: center; gap: 1rem; }
+.filter { color: #333; }
+
+/* --- Таблицы --- */
+
+table { border-collapse: collapse; }
+th, td { border: 1px solid #bbb; padding: 0.3rem 0.55rem; text-align: left; }
+thead th { background: #f2f2f2; }
+
+.price-grid input {
+  width: 7.5em;
+  border: none;
+  text-align: right;
+}
+.price-grid td { padding: 0; }
+.price-grid input:focus { outline: 2px solid #4a90d9; }
+/* Подтянутое из ESI — приглушённо: это черновик, ручной ввод главнее (SPEC §4) */
+.price-grid input.fetched { color: #767676; font-style: italic; }
+
+button.fetch { margin-bottom: 0.5rem; }
+.indicator { color: #555; margin-left: 0.5rem; display: none; }
+.indicator.htmx-request { display: inline; }
+
+.footnote { color: #666; font-size: 0.85em; margin: 0.5rem 0 0; }
+small.shallow { display: block; color: #a05a00; font-weight: 400; }
+
+.results-table { margin-top: 0.5rem; }
+.results-table .num, td.num, th.num { text-align: right; white-space: nowrap; }
+.results-table tr.best { background: #e6f4e6; font-weight: 600; }
+.results-table tr.warn td:first-child { color: #a05a00; }
+
+/* --- Результат --- */
+
+.summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin: 1rem 0;
+}
+.summary .card {
+  border: 1px solid #ccc;
+  padding: 0.6rem 1rem;
+  min-width: 14rem;
+}
+.summary .big { font-size: 1.5rem; font-weight: 700; }
+.summary small { display: block; color: #555; margin-top: 0.2rem; }
+
+.notes { color: #555; margin: 0.75rem 0; padding-left: 1.25rem; }
+.breakevens p { margin: 0.25rem 0; }
+
+.errors {
+  border: 1px solid #c0392b;
+  background: #fdf0ee;
+  color: #7b241c;
+  padding: 0.6rem 1rem;
+  margin: 1rem 0;
+}
+.errors ul { margin: 0.4rem 0 0; padding-left: 1.25rem; }
+
+.empty {
+  border: 1px solid #ccc;
+  background: #f7f7f7;
+  color: #555;
+  padding: 0.6rem 1rem;
+  margin: 1rem 0;
+}

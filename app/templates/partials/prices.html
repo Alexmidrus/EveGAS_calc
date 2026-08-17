@@ -1,0 +1,41 @@
+{# Блок 2: сетка цен 5×5 (SPEC §4). Отдаётся и при GET /, и в ответ на POST /fetch-prices. #}
+<table class="price-grid">
+  <thead>
+    <tr>
+      <th>Хаб</th>
+      <th>Доставка, ISK/м³</th>
+      {% for suffix, label in price_columns %}<th>{{ label }}</th>{% endfor %}
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in grid %}
+    <tr>
+      <th>{{ row.hub.name }}</th>
+      <td><input type="text" inputmode="decimal" name="{{ row.hub.key }}_rate" value="{{ row.rate }}"></td>
+      {% for suffix, label in price_columns %}
+      {% set cell = row.cells[suffix] %}
+      <td>
+        <input type="text" inputmode="decimal" data-price-cell
+               name="{{ row.hub.key }}_{{ suffix }}"
+               value="{{ cell.value }}"
+               {% if cell.fetched %}class="fetched" title="Подтянуто из ESI, можно перебить"{% endif %}>
+        {# Глубина стакана известна только для подтянутых цен; при ручной правке JS её стирает #}
+        <input type="hidden" name="{{ row.hub.key }}_{{ suffix }}_depth"
+               value="{% if cell.depth is not none %}{{ cell.depth }}{% endif %}">
+      </td>
+      {% endfor %}
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+{% if fetch_notes %}
+<ul class="notes">
+  {% for note in fetch_notes %}<li>{{ note }}</li>{% endfor %}
+</ul>
+{% endif %}
+
+{# Осознанный компромисс из docs/ESI.md §3.2 — обязан быть виден под сеткой #}
+<p class="footnote">Цены buy могут быть занижены — не учитываются ордера с радиусом
+  в прыжках из соседних систем. Ордера из игровых структур в публичную выдачу
+  API не попадают вовсе.</p>

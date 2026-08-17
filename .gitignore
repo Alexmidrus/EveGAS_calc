@@ -1,0 +1,39 @@
+# Локальный конфиг с личным контактом в User-Agent — не в репозиторий
+config.py
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Окружения
+.venv/
+venv/
+env/
+.env
+
+# Тесты и линтеры
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Инструменты разработки: настройки агентов и редакторов, не часть проекта
+.claude/
+.vscode/
+.idea/
+*.swp
+*~
+
+# Мусор файловых менеджеров
+.DS_Store
+Thumbs.db
+
+# Ресурсы для разработки. SDE — это 107 МБ входных данных для
+# tools/build_gases.py; в репозитории лежит только результат — data/gases.json
+sde.zip
+sde/
+*.zip
