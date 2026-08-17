@@ -65,15 +65,12 @@
           <input type="number" name="broker_fee" value="{{ defaults.broker_pct }}" min="0" max="5" step="any">
         </label>
 
-        <fieldset class="collateral">
-          <legend>Обеспечение</legend>
-          <label><input type="radio" name="collateral_mode" value="manual" checked> сумма вручную</label>
-          <label><input type="radio" name="collateral_mode" value="auto"> = стоимости закупки</label>
-          <label>Сумма, ISK
-            <input type="text" inputmode="numeric" name="collateral_manual" id="collateral-manual" value="0">
-          </label>
-          <label><input type="checkbox" name="include_collateral"> включать обеспечение в итог</label>
-        </fieldset>
+        <label>Обеспечение, % от стоимости газа
+          <input type="number" name="collateral_pct" value="{{ defaults.collateral_pct }}"
+                 min="0" max="{{ defaults.collateral_pct_max }}" step="any">
+          <small>Надбавка к доставке: процент от стоимости газа в каждом сценарии,
+            без брокерской комиссии.</small>
+        </label>
       </div>
       <button type="button" id="reset-settings">Сбросить настройки</button>
     </fieldset>

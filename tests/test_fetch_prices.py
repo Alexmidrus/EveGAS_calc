@@ -232,8 +232,7 @@ class TestDepthReachesResults:
         "structure": "athanor",
         "gde_level": "5",
         "broker_fee": "1.5",
-        "collateral_mode": "manual",
-        "collateral_manual": "0",
+        "collateral_pct": "0.5",
         "jita_rate": "500",
         "jita_compressed_sell": "2750",
     }

@@ -9,7 +9,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from app.core.constants import (
-    COLLATERAL_FEE_RATE,
+    COLLATERAL_PCT_DEFAULT,
+    COLLATERAL_PCT_MAX,
     COMPRESSION_QUANTITY_RATIO,
     COMPRESSION_VOLUME_RATIO,
     ETA_BASE,
@@ -22,7 +23,8 @@ from app.core.constants import (
 
 __all__ = [
     # реэкспорт констант — для calculator.py
-    "COLLATERAL_FEE_RATE",
+    "COLLATERAL_PCT_DEFAULT",
+    "COLLATERAL_PCT_MAX",
     "COMPRESSION_QUANTITY_RATIO",
     "COMPRESSION_VOLUME_RATIO",
     "ETA_BASE",
@@ -32,7 +34,6 @@ __all__ = [
     "PRICE_OUTLIER_FACTOR",
     "STRUCTURE_BONUS",
     # перечисления
-    "CollateralMode",
     "GasForm",
     "OrderSide",
     "StructureType",
@@ -77,13 +78,6 @@ class OrderSide(StrEnum):
 
     SELL = "sell"
     BUY = "buy"
-
-
-class CollateralMode(StrEnum):
-    """Режим обеспечения: ручная сумма или равная стоимости закупки."""
-
-    MANUAL = "manual"
-    AUTO = "auto"
 
 
 class WarningCode(StrEnum):
@@ -152,10 +146,10 @@ class HubPrices:
 class CalcInput:
     """Параметры расчёта (блок 1 интерфейса).
 
-    include_collateral_fee — «включать обеспечение в итог» из SPEC. Управляет
-    включением сбора 0.5% в итоговую сумму; сам залог расходом не считается
-    никогда (это возвратные деньги), а сбор всегда считается и показывается.
-    Семантика выверена по контрольному примеру DOMAIN.md §5.
+    collateral_pct — доля от стоимости газа, которую перевозчик добавляет
+    к плате за объём (DOMAIN §4). Хранится долей (0.005), в форме вводится
+    процентами (0.5). Надбавка входит в доставку всегда и в каждом сценарии
+    своя, потому что база — стоимость газа именно этого сценария.
     """
 
     gas: Gas
@@ -163,9 +157,7 @@ class CalcInput:
     structure: StructureType
     gde_level: int             # 0..5
     broker_fee: float          # доля, например 0.015
-    collateral_mode: CollateralMode = CollateralMode.MANUAL
-    collateral_manual: float = 0.0   # ISK, используется только в ручном режиме
-    include_collateral_fee: bool = False  # по умолчанию выкл (SPEC §3)
+    collateral_pct: float = COLLATERAL_PCT_DEFAULT  # доля, например 0.005
     # «Только sell» (SPEC §5.4): buy-ордер — это заявка, а не покупка. Когда газ
     # нужен сегодня, половина строк — шум. По умолчанию выключен.
     sell_only: bool = False
@@ -175,9 +167,10 @@ class CalcInput:
 class Scenario:
     """Одна строка результата со всеми промежуточными числами.
 
-    freight_volume — чистая доставка (объём × ставка), как в колонке «Доставка»
-    контрольного примера DOMAIN §5. freight — она же плюс сбор за обеспечение,
-    как описано в SPEC §5.2. Шаблон сам решит, что показывать.
+    freight_volume — плата за объём (объём × ставка) без надбавки за обеспечение.
+    freight — полная доставка, она же в колонке «Доставка» контрольного примера
+    DOMAIN §5. Разбивка сохранена, чтобы интерфейс мог показать, из чего
+    сложилась доставка.
     """
 
     hub_key: str
@@ -189,10 +182,9 @@ class Scenario:
     purchase: float        # qty * price
     broker: float          # брокерская комиссия (0 для sell)
     freight_volume: float  # volume_m3 * ставка хаба
-    collateral: float      # сумма обеспечения C этого сценария
-    collateral_fee: float  # C * 0.005
+    collateral_fee: float  # надбавка за обеспечение: purchase * collateral_pct
     freight: float         # freight_volume + collateral_fee
-    total: float           # итог с учётом флага include_collateral_fee
+    total: float           # purchase + broker + freight
     isk_per_unit: float    # total / N — главная метрика
     delta_pct: float | None = None       # отставание от лучшего, %; None у первой строки
     available_qty: int | None = None     # глубина стакана; None — если она неизвестна

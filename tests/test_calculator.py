@@ -6,7 +6,6 @@ from app.core import calculator as calc
 from app.core import catalog
 from app.core.models import (
     CalcInput,
-    CollateralMode,
     GasForm,
     HubDepth,
     HubPrices,
@@ -28,18 +27,19 @@ CONTROL_PRICES: dict[str, HubPrices] = {
 }
 
 # Ожидаемая таблица DOMAIN §5, в порядке сортировки:
-# (хаб, форма, сторона, цена, qty, объём м³, доставка без сбора, итого, ISK/юнит)
+# (хаб, форма, сторона, цена, qty, объём м³, доставка полная, итого, ISK/юнит)
+# «Доставка полная» = объём × ставка + обеспечение 0.5% от стоимости газа.
 EXPECTED_ROWS = [
-    ("amarr", GasForm.COMPRESSED, OrderSide.BUY, 2050, 56_180, 28_090, 19_663_000, 137_559_535, 2751.19),
-    ("amarr", GasForm.COMPRESSED, OrderSide.SELL, 2300, 56_180, 28_090, 19_663_000, 149_877_000, 2997.54),
-    ("jita", GasForm.COMPRESSED, OrderSide.BUY, 2400, 56_180, 28_090, 14_045_000, 151_899_480, 3037.99),
-    ("dodixie", GasForm.COMPRESSED, OrderSide.BUY, 2450, 56_180, 28_090, 16_854_000, 157_559_615, 3151.19),
-    ("jita", GasForm.COMPRESSED, OrderSide.SELL, 2750, 56_180, 28_090, 14_045_000, 169_540_000, 3390.80),
-    ("dodixie", GasForm.COMPRESSED, OrderSide.SELL, 2900, 56_180, 28_090, 16_854_000, 180_776_000, 3615.52),
-    ("rens", GasForm.COMPRESSED, OrderSide.SELL, 3050, 56_180, 28_090, 25_281_000, 197_630_000, 3952.60),
-    ("hek", GasForm.COMPRESSED, OrderSide.SELL, 3200, 56_180, 28_090, 23_876_500, 204_652_500, 4093.05),
-    ("jita", GasForm.RAW, OrderSide.BUY, 2620, 50_000, 250_000, 125_000_000, 258_965_000, 5179.30),
-    ("jita", GasForm.RAW, OrderSide.SELL, 3000, 50_000, 250_000, 125_000_000, 276_000_000, 5520.00),
+    ("amarr", GasForm.COMPRESSED, OrderSide.BUY, 2050, 56_180, 28_090, 20_238_845, 137_135_380, 2742.71),
+    ("amarr", GasForm.COMPRESSED, OrderSide.SELL, 2300, 56_180, 28_090, 20_309_070, 149_523_070, 2990.46),
+    ("jita", GasForm.COMPRESSED, OrderSide.BUY, 2400, 56_180, 28_090, 14_719_160, 151_573_640, 3031.47),
+    ("dodixie", GasForm.COMPRESSED, OrderSide.BUY, 2450, 56_180, 28_090, 17_542_205, 157_247_820, 3144.96),
+    ("jita", GasForm.COMPRESSED, OrderSide.SELL, 2750, 56_180, 28_090, 14_817_475, 169_312_475, 3386.25),
+    ("dodixie", GasForm.COMPRESSED, OrderSide.SELL, 2900, 56_180, 28_090, 17_668_610, 180_590_610, 3611.81),
+    ("rens", GasForm.COMPRESSED, OrderSide.SELL, 3050, 56_180, 28_090, 26_137_745, 197_486_745, 3949.73),
+    ("hek", GasForm.COMPRESSED, OrderSide.SELL, 3200, 56_180, 28_090, 24_775_380, 204_551_380, 4091.03),
+    ("jita", GasForm.RAW, OrderSide.BUY, 2620, 50_000, 250_000, 125_655_000, 258_620_000, 5172.40),
+    ("jita", GasForm.RAW, OrderSide.SELL, 3000, 50_000, 250_000, 125_750_000, 275_750_000, 5515.00),
 ]
 
 
@@ -51,9 +51,7 @@ def control_input(**overrides) -> CalcInput:
         structure=StructureType.ATHANOR,
         gde_level=5,
         broker_fee=0.015,
-        collateral_mode=CollateralMode.MANUAL,
-        collateral_manual=200_000_000,
-        include_collateral_fee=True,
+        collateral_pct=0.005,
     )
     params.update(overrides)
     return CalcInput(**params)
@@ -205,7 +203,7 @@ class TestControlExample:
     def test_rows_match_expected_table(self, result):
         """Каждая строка: порядок сортировки и все числа с точностью до сотых."""
         for scenario, expected in zip(result.scenarios, EXPECTED_ROWS, strict=True):
-            hub, form, side, price, qty, volume, freight_volume, total, per_unit = expected
+            hub, form, side, price, qty, volume, freight, total, per_unit = expected
             label = f"{hub}/{form}/{side}"
             assert scenario.hub_key == hub, label
             assert scenario.form is form, label
@@ -213,7 +211,7 @@ class TestControlExample:
             assert scenario.price == price, label
             assert scenario.qty == qty, label
             assert scenario.volume_m3 == pytest.approx(volume, abs=0.01), label
-            assert scenario.freight_volume == pytest.approx(freight_volume, abs=0.01), label
+            assert scenario.freight == pytest.approx(freight, abs=0.01), label
             assert scenario.total == pytest.approx(total, abs=0.01), label
             assert scenario.isk_per_unit == pytest.approx(per_unit, abs=0.01), label
 
@@ -222,9 +220,9 @@ class TestControlExample:
         row = result.scenarios[0]
         assert row.purchase == pytest.approx(115_169_000, abs=0.01)
         assert row.broker == pytest.approx(1_727_535, abs=0.01)
-        assert row.collateral == 200_000_000
-        assert row.collateral_fee == pytest.approx(1_000_000, abs=0.01)
-        assert row.freight == pytest.approx(20_663_000, abs=0.01)
+        assert row.freight_volume == pytest.approx(19_663_000, abs=0.01)
+        assert row.collateral_fee == pytest.approx(575_845, abs=0.01)
+        assert row.freight == pytest.approx(20_238_845, abs=0.01)
 
     def test_broker_only_on_buy(self, result):
         """Sell-сценарии — без брокерской комиссии, buy — с ней."""
@@ -236,11 +234,15 @@ class TestControlExample:
                     scenario.purchase * 0.015, abs=0.01
                 )
 
-    def test_manual_collateral_same_everywhere(self, result):
-        """Ручной режим: сбор 0.5% от одной суммы одинаков во всех строках."""
+    def test_collateral_is_share_of_each_purchase(self, result):
+        """Обеспечение своё в каждой строке: 0.5% от стоимости газа этой строки."""
         for scenario in result.scenarios:
-            assert scenario.collateral == 200_000_000
-            assert scenario.collateral_fee == pytest.approx(1_000_000, abs=0.01)
+            assert scenario.collateral_fee == pytest.approx(
+                scenario.purchase * 0.005, abs=0.01
+            )
+            assert scenario.freight == pytest.approx(
+                scenario.freight_volume + scenario.collateral_fee, abs=0.01
+            )
 
     def test_summary(self, result):
         """Сводка: лучший, экономия против худшего, потери разжатия."""
@@ -249,7 +251,7 @@ class TestControlExample:
         assert (summary.best.hub_key, summary.best.form, summary.best.side) == (
             "amarr", GasForm.COMPRESSED, OrderSide.BUY,
         )
-        assert summary.savings_vs_worst == pytest.approx(138_440_465, abs=0.01)
+        assert summary.savings_vs_worst == pytest.approx(138_614_620, abs=0.01)
         assert summary.loss_units == 6_180
         assert summary.loss_pct == pytest.approx(6_180 / 56_180 * 100, abs=1e-9)
 
@@ -275,74 +277,88 @@ class TestControlExample:
             assert scenario.warnings == ()
 
 
-class TestCollateralModes:
-    """Оба режима обеспечения и флаг включения сбора в итог."""
+class TestCollateral:
+    """Обеспечение — процент от стоимости газа, надбавка к доставке (DOMAIN §4)."""
 
-    def test_manual_fee_excluded_from_total(self):
-        """Флаг выключен: сбор не входит в итог, но считается и показывается."""
-        result = calc.build_scenarios(
-            control_input(include_collateral_fee=False), CONTROL_PRICES
-        )
-        row = result.scenarios[0]  # Amarr / сжатый / buy
-        assert row.total == pytest.approx(136_559_535, abs=0.01)  # минус 1 000 000 сбора
-        assert row.isk_per_unit == pytest.approx(2731.19, abs=0.01)
-        assert row.collateral_fee == pytest.approx(1_000_000, abs=0.01)  # виден всегда
-        assert row.freight == pytest.approx(20_663_000, abs=0.01)
-
-    def test_auto_collateral_per_scenario(self):
-        """Авто-режим: C = стоимость закупки, свой в каждой строке.
+    def test_fee_per_scenario(self):
+        """Надбавка считается от стоимости газа каждой строки.
 
         N=1000, eta=0.89 → qty = ceil(1123.6) = 1124.
-        сжатый sell @2000: закупка 2 248 000, сбор 11 240,
-            объём 562 м³, доставка 281 000 → итого 2 540 240.
-        сырой buy @1800: закупка 1 800 000, брокер 27 000, сбор 9 000,
-            объём 5000 м³, доставка 2 500 000 → итого 4 336 000.
+        сжатый sell @2000: закупка 2 248 000, обеспечение 11 240,
+            объём 562 м³, плата за объём 281 000 → итого 2 540 240.
+        сырой buy @1800: закупка 1 800 000, брокер 27 000, обеспечение 9 000,
+            объём 5000 м³, плата за объём 2 500 000 → итого 4 336 000.
         """
         result = calc.build_scenarios(
-            control_input(
-                n_units=1000,
-                collateral_mode=CollateralMode.AUTO,
-                collateral_manual=0,
-                include_collateral_fee=True,
-            ),
+            control_input(n_units=1000),
             {"jita": HubPrices(freight_rate=500, compressed_sell=2000, raw_buy=1800)},
         )
         assert result.compressed_qty == 1124
         by_form = {s.form: s for s in result.scenarios}
 
         compressed = by_form[GasForm.COMPRESSED]
-        assert compressed.collateral == pytest.approx(2_248_000, abs=0.01)
         assert compressed.collateral_fee == pytest.approx(11_240, abs=0.01)
+        assert compressed.freight == pytest.approx(292_240, abs=0.01)
         assert compressed.total == pytest.approx(2_540_240, abs=0.01)
         assert compressed.isk_per_unit == pytest.approx(2540.24, abs=0.01)
 
         raw = by_form[GasForm.RAW]
-        assert raw.collateral == pytest.approx(1_800_000, abs=0.01)
         assert raw.collateral_fee == pytest.approx(9_000, abs=0.01)
         assert raw.broker == pytest.approx(27_000, abs=0.01)
         assert raw.total == pytest.approx(4_336_000, abs=0.01)
 
-    def test_auto_fee_excluded_from_total(self):
-        """Авто-режим с выключенным флагом: сбор виден, но в итог не входит."""
+    def test_base_excludes_broker(self):
+        """База — чистая стоимость газа. Брокерская комиссия в неё не входит.
+
+        Ловушка: 1 800 000 * 0.005 = 9 000, а с комиссией было бы
+        (1 800 000 + 27 000) * 0.005 = 9 135.
+        """
         result = calc.build_scenarios(
-            control_input(
-                n_units=1000,
-                collateral_mode=CollateralMode.AUTO,
-                collateral_manual=0,
-                include_collateral_fee=False,
-            ),
-            {"jita": HubPrices(freight_rate=500, compressed_sell=2000)},
+            control_input(n_units=1000),
+            {"jita": HubPrices(freight_rate=500, raw_buy=1800)},
         )
         row = result.scenarios[0]
-        assert row.collateral_fee == pytest.approx(11_240, abs=0.01)
-        assert row.total == pytest.approx(2_529_000, abs=0.01)  # без сбора
+        assert row.broker > 0  # это buy-сценарий, комиссия есть
+        assert row.collateral_fee == pytest.approx(9_000, abs=0.01)
 
-    def test_negative_manual_collateral(self):
+    def test_zero_pct_leaves_only_volume_charge(self):
+        """Обеспечение 0% — доставка равна плате за объём."""
+        result = calc.build_scenarios(
+            control_input(collateral_pct=0.0), CONTROL_PRICES
+        )
+        for scenario in result.scenarios:
+            assert scenario.collateral_fee == 0.0
+            assert scenario.freight == pytest.approx(scenario.freight_volume, abs=0.01)
+
+    def test_pct_can_change_order(self):
+        """Надбавка пропорциональна стоимости газа и потому влияет на сортировку.
+
+        Это главное отличие от старой модели с фиксированной суммой: та сдвигала
+        все строки на одну величину и порядок сохраняла.
+
+        Jita:  дорогой газ (3000), дешёвая доставка (10)  → закупка 168 540 000
+        Amarr: газ дешевле (2600), доставка дорогая (900) → закупка 146 068 000
+
+        При 0%  Jita впереди: 168 820 900 против 171 349 000.
+        При 30% дорогой газ штрафуется сильнее, и вперёд выходит Amarr:
+        219 382 900 против 215 169 400.
+        """
+        prices = {
+            "jita": HubPrices(freight_rate=10, compressed_sell=3000),
+            "amarr": HubPrices(freight_rate=900, compressed_sell=2600),
+        }
+        without = calc.build_scenarios(control_input(collateral_pct=0.0), prices)
+        assert without.scenarios[0].hub_key == "jita"
+        assert without.scenarios[0].total == pytest.approx(168_820_900, abs=0.01)
+
+        heavy = calc.build_scenarios(control_input(collateral_pct=0.30), prices)
+        assert heavy.scenarios[0].hub_key == "amarr"
+        assert heavy.scenarios[0].total == pytest.approx(215_169_400, abs=0.01)
+
+    def test_negative_pct(self):
         """Отрицательное обеспечение — ошибка."""
         with pytest.raises(ValueError):
-            calc.build_scenarios(
-                control_input(collateral_manual=-1), CONTROL_PRICES
-            )
+            calc.build_scenarios(control_input(collateral_pct=-0.01), CONTROL_PRICES)
 
 
 class TestMissingData:
@@ -459,10 +475,10 @@ class TestSellOnlyFilter:
     def test_summary_recomputed_on_filtered_rows(self):
         """Лучший вариант считается по тому, что осталось на экране."""
         result = calc.build_scenarios(control_input(sell_only=True), CONTROL_PRICES)
-        # в полном примере лучшим был Amarr сжатый buy по 2 751.19
+        # в полном примере лучшим был Amarr сжатый buy по 2 742.71
         assert result.summary.best.hub_key == "amarr"
         assert result.summary.best.side is OrderSide.SELL
-        assert result.summary.best.isk_per_unit == pytest.approx(2997.54, abs=0.01)
+        assert result.summary.best.isk_per_unit == pytest.approx(2990.46, abs=0.01)
         assert result.summary.best.delta_pct is None
 
     def test_breakevens_survive_the_filter(self):

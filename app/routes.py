@@ -10,8 +10,9 @@ from flask import Blueprint, current_app, render_template, request
 from app.core import calculator, catalog
 from app.core.constants import GDE_MAX_LEVEL, GDE_MIN_LEVEL
 from app.core.models import (
+    COLLATERAL_PCT_DEFAULT,
+    COLLATERAL_PCT_MAX,
     CalcInput,
-    CollateralMode,
     Gas,
     GasForm,
     Hub,
@@ -61,6 +62,9 @@ DEFAULTS = {
     "structure": StructureType.ATHANOR.value,
     "gde_level": 5,
     "broker_pct": 1.5,
+    # В форме проценты, в ядре доля — отсюда умножение на 100
+    "collateral_pct": COLLATERAL_PCT_DEFAULT * 100,
+    "collateral_pct_max": COLLATERAL_PCT_MAX * 100,
 }
 
 # Числа из формы: пробелы-разрядники (обычный, NBSP, узкий NBSP) и запятая допустимы
@@ -255,24 +259,22 @@ def _parse_form(form) -> tuple[CalcInput | None, dict[str, HubPrices], list[str]
         except ValueError:
             errors.append(f"«Брокерская комиссия»: не похоже на число: {raw!r}.")
 
-    collateral_mode = CollateralMode.MANUAL
-    raw = form.get("collateral_mode", CollateralMode.MANUAL.value).strip()
-    try:
-        collateral_mode = CollateralMode(raw)
-    except ValueError:
-        errors.append(f"Неизвестный режим обеспечения: {raw!r}.")
-
-    collateral_manual = 0.0
-    raw = form.get("collateral_manual", "").strip()
-    if raw:
+    collateral_pct = 0.0
+    raw = form.get("collateral_pct", "").strip()
+    if not raw:
+        errors.append("«Обеспечение»: поле пустое.")
+    else:
         try:
-            collateral_manual = _to_float(raw)
-            if collateral_manual < 0:
-                errors.append("«Сумма обеспечения»: не может быть отрицательной.")
+            pct = _to_float(raw)
+            if not 0 <= pct <= COLLATERAL_PCT_MAX * 100:
+                errors.append(
+                    f"«Обеспечение»: число от 0 до {COLLATERAL_PCT_MAX * 100:g} (в процентах)."
+                )
+            else:
+                collateral_pct = pct / 100  # в форме проценты, в ядре — доля
         except ValueError:
-            errors.append(f"«Сумма обеспечения»: не похоже на число: {raw!r}.")
+            errors.append(f"«Обеспечение»: не похоже на число: {raw!r}.")
 
-    include_collateral_fee = form.get("include_collateral") is not None
     sell_only = form.get("sell_only") is not None
 
     prices: dict[str, HubPrices] = {}
@@ -331,9 +333,7 @@ def _parse_form(form) -> tuple[CalcInput | None, dict[str, HubPrices], list[str]
         structure=structure,
         gde_level=gde_level,
         broker_fee=broker_fee,
-        collateral_mode=collateral_mode,
-        collateral_manual=collateral_manual,
-        include_collateral_fee=include_collateral_fee,
+        collateral_pct=collateral_pct,
         sell_only=sell_only,
     )
     return inp, prices, errors

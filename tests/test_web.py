@@ -26,9 +26,7 @@ CONTROL_FORM = {
     "structure": "athanor",
     "gde_level": "5",
     "broker_fee": "1,5",
-    "collateral_mode": "manual",
-    "collateral_manual": "200 000 000",
-    "include_collateral": "on",
+    "collateral_pct": "0,5",
     "jita_rate": "500",
     "amarr_rate": "700",
     "dodixie_rate": "600",
@@ -115,38 +113,39 @@ class TestCalculateControlExample:
     def test_key_numbers_on_screen(self, html):
         """Числа из таблицы DOMAIN §5 присутствуют на экране."""
         for number in (
-            "2 751.19",      # лучший ISK/юнит
-            "2 997.54", "3 037.99", "3 151.19", "3 390.80",
-            "3 615.52", "3 952.60", "4 093.05", "5 179.30", "5 520.00",
-            "137 559 535",   # лучший итог
-            "276 000 000",   # худший итог
+            "2 742.71",      # лучший ISK/юнит
+            "2 990.46", "3 031.47", "3 144.96", "3 386.25",
+            "3 611.81", "3 949.73", "4 091.03", "5 172.40", "5 515.00",
+            "137 135 380",   # лучший итог
+            "275 750 000",   # худший итог
             "56 180",        # сколько сжатого покупаем
-            "19 663 000",    # доставка Amarr (без сбора)
+            "20 238 845",    # полная доставка Amarr: объём плюс обеспечение
             "6 180",         # потери
         ):
             assert number in html, f"нет числа {number}"
 
     def test_sort_order(self, html):
         """Строки идут по возрастанию ISK/юнит."""
-        positions = [html.index(n) for n in ("2 751.19", "2 997.54", "3 037.99", "5 520.00")]
+        positions = [html.index(n) for n in ("2 742.71", "2 990.46", "3 031.47", "5 515.00")]
         assert positions == sorted(positions)
 
     def test_summary(self, html):
         """Сводка: лучший вариант, экономия, потери."""
         assert "Amarr" in html
         assert "сжатый, buy" in html
-        assert "138.4M" in html      # экономия против худшего
+        assert "138.6M" in html      # экономия против худшего
         assert "11%" in html         # процент потерь
 
     def test_breakeven(self, html):
-        """Точка безубыточности Jita: 4 645 ISK."""
+        """Точка безубыточности Jita: 4 645 ISK. От обеспечения не зависит."""
         assert "сжатый выгоднее сырого" in html
         assert "4 645" in html
 
     def test_collateral_note(self, html):
-        """Сноска о сборе за обеспечение: 1 000 000 ISK, включён в итог."""
-        assert "1 000 000" in html
-        assert "включён" in html
+        """Сноска: процент, надбавка лучшей строки и плата за объём отдельно."""
+        assert "обеспечение — 0.5%" in html
+        assert "575 845" in html     # надбавка Amarr / сжатый / buy
+        assert "19 663 000" in html  # плата за объём той же строки
 
     def test_no_missing_rate_notes(self, html):
         """Все ставки заданы — пометок «не задана доставка» нет."""
@@ -154,22 +153,34 @@ class TestCalculateControlExample:
 
 
 class TestCalculateVariants:
-    """Вариации: флаг сбора, авто-режим, пропуски."""
+    """Вариации: процент обеспечения, пропуски."""
 
-    def test_fee_excluded(self, client):
-        """Без галочки сбор не входит в итог: 137 559 535 → 136 559 535."""
-        form = {k: v for k, v in CONTROL_FORM.items() if k != "include_collateral"}
+    def test_zero_collateral(self, client):
+        """0% — доставка Amarr равна плате за объём, сноски об обеспечении нет."""
+        form = dict(CONTROL_FORM, collateral_pct="0")
         html = client.post("/calculate", data=form).get_data(as_text=True)
-        assert "136 559 535" in html
-        assert "не включён" in html
+        assert "19 663 000" in html
+        assert "20 238 845" not in html
+        assert "В «Доставку» входит обеспечение" not in html
 
-    def test_auto_mode(self, client):
-        """Авто-режим обеспечения работает и без поля суммы (оно disabled)."""
-        form = dict(CONTROL_FORM)
-        form["collateral_mode"] = "auto"
-        del form["collateral_manual"]
+    def test_bigger_collateral_raises_freight(self, client):
+        """2% вместо 0.5%: надбавка Amarr вчетверо больше, 575 845 → 2 303 380."""
+        form = dict(CONTROL_FORM, collateral_pct="2")
         html = client.post("/calculate", data=form).get_data(as_text=True)
-        assert "0.5% от стоимости закупки" in html
+        assert "2 303 380" in html
+        assert "обеспечение — 2%" in html
+
+    def test_collateral_missing(self, client):
+        """Пустое поле обеспечения — понятная ошибка, а не молчаливый ноль."""
+        form = {k: v for k, v in CONTROL_FORM.items() if k != "collateral_pct"}
+        html = client.post("/calculate", data=form).get_data(as_text=True)
+        assert "«Обеспечение»: поле пустое." in html
+
+    def test_collateral_not_a_number(self, client):
+        """Мусор в поле обеспечения — ошибка с указанием, что именно введено."""
+        form = dict(CONTROL_FORM, collateral_pct="полпроцента")
+        html = client.post("/calculate", data=form).get_data(as_text=True)
+        assert "не похоже на число" in html
 
     def test_missing_rate_drops_hub(self, client):
         """Хаб без ставки: строк нет, пометка есть."""
@@ -200,14 +211,14 @@ class TestSellOnlyFilter:
     def test_off_by_default(self, client):
         """По умолчанию показываются все сценарии."""
         html = client.post("/calculate", data=CONTROL_FORM).get_data(as_text=True)
-        assert "2 751.19" in html  # Amarr сжатый buy — лучший вариант без фильтра
+        assert "2 742.71" in html  # Amarr сжатый buy — лучший вариант без фильтра
         assert "только sell" not in html
 
     def test_on_hides_buy_rows(self, client):
         form = dict(CONTROL_FORM, sell_only="on")
         html = client.post("/calculate", data=form).get_data(as_text=True)
-        assert "2 751.19" not in html          # buy-строки ушли
-        assert "2 997.54" in html              # Amarr сжатый sell остался
+        assert "2 742.71" not in html          # buy-строки ушли
+        assert "2 990.46" in html              # Amarr сжатый sell остался
         assert "Показаны только sell" in html  # и об этом сказано
 
     def test_best_variant_recomputed(self, client):

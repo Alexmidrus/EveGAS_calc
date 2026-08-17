@@ -11,7 +11,6 @@ from fractions import Fraction
 from statistics import median
 
 from app.core.models import (
-    COLLATERAL_FEE_RATE,
     COMPRESSION_VOLUME_RATIO,
     ETA_BASE,
     GDE_BONUS_PER_LEVEL,
@@ -22,7 +21,6 @@ from app.core.models import (
     Breakeven,
     CalcInput,
     CalcResult,
-    CollateralMode,
     GasForm,
     HubPrices,
     OrderSide,
@@ -156,8 +154,8 @@ def build_scenarios(inp: CalcInput, prices_by_hub: Mapping[str, HubPrices]) -> C
     """
     if inp.broker_fee < 0:
         raise ValueError(f"Брокерская комиссия не может быть отрицательной: {inp.broker_fee}")
-    if inp.collateral_mode is CollateralMode.MANUAL and inp.collateral_manual < 0:
-        raise ValueError(f"Сумма обеспечения не может быть отрицательной: {inp.collateral_manual}")
+    if inp.collateral_pct < 0:
+        raise ValueError(f"Обеспечение не может быть отрицательным: {inp.collateral_pct}")
 
     eta = decompression_efficiency(inp.structure, inp.gde_level)
     compressed_qty = required_compressed_qty(inp.n_units, eta)
@@ -209,14 +207,12 @@ def build_scenarios(inp: CalcInput, prices_by_hub: Mapping[str, HubPrices]) -> C
             volume_m3 = qty * unit_volume
             purchase = qty * price
             broker = purchase * inp.broker_fee if side is OrderSide.BUY else 0.0
-            collateral = (
-                purchase if inp.collateral_mode is CollateralMode.AUTO else inp.collateral_manual
-            )
-            collateral_fee = collateral * COLLATERAL_FEE_RATE
+            # Обеспечение — процент от стоимости газа, без брокерской комиссии:
+            # комиссия платится бирже и в трюме не едет (DOMAIN §4).
+            collateral_fee = purchase * inp.collateral_pct
             freight_volume = volume_m3 * rate
-            total = purchase + broker + freight_volume
-            if inp.include_collateral_fee:
-                total += collateral_fee
+            freight = freight_volume + collateral_fee
+            total = purchase + broker + freight
             rows.append(
                 Scenario(
                     hub_key=hub_key,
@@ -228,9 +224,8 @@ def build_scenarios(inp: CalcInput, prices_by_hub: Mapping[str, HubPrices]) -> C
                     purchase=purchase,
                     broker=broker,
                     freight_volume=freight_volume,
-                    collateral=collateral,
                     collateral_fee=collateral_fee,
-                    freight=freight_volume + collateral_fee,
+                    freight=freight,
                     total=total,
                     isk_per_unit=total / inp.n_units,
                     available_qty=available,

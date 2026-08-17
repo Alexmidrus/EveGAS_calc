@@ -68,7 +68,7 @@
       <td class="num">{{ s.qty|num }}{% if warning_codes.SHALLOW_BOOK in s.warnings %}
         <small class="shallow">в стакане только {{ s.available_qty|num }}</small>{% endif %}</td>
       <td class="num">{{ s.volume_m3|num }}</td>
-      <td class="num">{{ s.freight_volume|num }}</td>
+      <td class="num">{{ s.freight|num }}</td>
       <td class="num">{{ s.total|num }}</td>
       <td class="num">{{ s.isk_per_unit|num(2) }}</td>
       <td class="num">{% if s.delta_pct is none %}—{% else %}+{{ s.delta_pct|num(1) }}%{% endif %}</td>
@@ -83,13 +83,11 @@
   <li>Показаны только sell-сценарии: buy-ордер — это заявка, она может не исполниться.
     Снимите галочку «только sell», чтобы увидеть все варианты.</li>
   {% endif %}
-  {% if inp.collateral_mode.value == 'auto' %}
-  <li>Сбор за обеспечение — 0.5% от стоимости закупки каждой строки;
-    {{ 'включён' if inp.include_collateral_fee else 'посчитан, но не включён' }} в «Итого».</li>
-  {% elif result.scenarios[0].collateral_fee > 0 %}
-  <li>Сбор за обеспечение: {{ result.scenarios[0].collateral_fee|num }} ISK на сценарий;
-    {{ 'включён' if inp.include_collateral_fee else 'посчитан, но не включён' }} в «Итого».
-    Колонка «Доставка» — без сбора.</li>
+  {% if inp.collateral_pct > 0 %}
+  <li>В «Доставку» входит обеспечение — {{ (inp.collateral_pct * 100)|num }}% от стоимости
+    газа. Оно своё в каждой строке: где газ дороже, там и надбавка больше. У лучшего
+    варианта это {{ result.scenarios[0].collateral_fee|num }} ISK
+    при плате за объём {{ result.scenarios[0].freight_volume|num }} ISK.</li>
   {% endif %}
   {% if has_outliers %}
   <li>* Цена сильно выбивается — проверьте.</li>

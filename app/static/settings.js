@@ -1,5 +1,4 @@
-/* Логика страницы: настройки в localStorage (SPEC §7), живые подписи,
-   блокировка суммы обеспечения в авто-режиме.
+/* Логика страницы: настройки в localStorage (SPEC §7) и живые подписи.
    Игровых чисел в этом файле нет — всё приходит из data-атрибутов сервера. */
 (function () {
   "use strict";
@@ -8,11 +7,10 @@
   var form = document.getElementById("calc-form");
   if (!form) { return; }
 
-  /* Сохраняем: ставки доставки, структуру, GDE, брокера, режим и сумму
-     обеспечения, чекбоксы. Цены НЕ сохраняем — устаревают за минуты. */
+  /* Сохраняем: ставки доставки, структуру, GDE, брокера, процент обеспечения,
+     чекбоксы. Цены НЕ сохраняем — устаревают за минуты. */
   function savedFieldNames() {
-    var names = ["structure", "gde_level", "broker_fee",
-                 "collateral_mode", "collateral_manual", "include_collateral",
+    var names = ["structure", "gde_level", "broker_fee", "collateral_pct",
                  "sell_only"];
     Array.prototype.forEach.call(form.elements, function (el) {
       if (el.name && /_rate$/.test(el.name)) { names.push(el.name); }
@@ -75,12 +73,6 @@
     if (option) { gasVolumes.textContent = option.getAttribute("data-volumes"); }
   }
 
-  /* Сумма обеспечения активна только в ручном режиме. */
-  var collateralInput = document.getElementById("collateral-manual");
-  function updateCollateralState() {
-    if (collateralInput) { collateralInput.disabled = getField("collateral_mode") === "auto"; }
-  }
-
   var resetButton = document.getElementById("reset-settings");
   if (resetButton) {
     resetButton.addEventListener("click", function () {
@@ -104,7 +96,6 @@
   form.addEventListener("change", function () {
     updateEta();
     updateVolumes();
-    updateCollateralState();
     saveSettings();
   });
 
@@ -113,5 +104,4 @@
   restoreSettings();
   updateEta();
   updateVolumes();
-  updateCollateralState();
 })();
