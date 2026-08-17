@@ -1,0 +1,35 @@
+# Переводы строк. Проект разрабатывается на Windows, а работает на Linux-хостинге,
+# поэтому и в репозитории, и в рабочем каталоге держим LF. Без этого CRLF из Windows
+# уедет на сервер: bash не понимает `#!/usr/bin/env python\r`, а diff показывает
+# перезаписанным весь файл, в котором поменяли одну строку.
+* text=auto eol=lf
+
+# Явно текстовые — на случай, если эвристика ошибётся на файле без расширения
+*.py      text eol=lf
+*.html    text eol=lf
+*.css     text eol=lf
+*.js      text eol=lf
+*.json    text eol=lf
+*.md      text eol=lf
+*.txt     text eol=lf
+*.cfg     text eol=lf
+*.toml    text eol=lf
+*.yml     text eol=lf
+*.yaml    text eol=lf
+*.sh      text eol=lf
+
+# Бинарное: не трогать переводы строк, не пытаться показать diff
+*.png     binary
+*.jpg     binary
+*.jpeg    binary
+*.gif     binary
+*.ico     binary
+*.webp    binary
+*.woff    binary
+*.woff2   binary
+*.zip     binary
+*.gz      binary
+
+# Вендоренная библиотека: в статистике языков репозитория ей не место,
+# и построчный diff по минифицированному файлу бесполезен
+app/static/htmx.min.js linguist-vendored -diff
