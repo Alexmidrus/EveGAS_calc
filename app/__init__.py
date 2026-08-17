@@ -28,6 +28,10 @@ def create_app(config: Mapping[str, Any] | None = None) -> Flask:
     app.add_template_filter(formatting.fmt_compact, "compact")
     app.add_template_filter(formatting.fmt_percent, "pct")
 
+    from app import db
+
+    db.init_app(app)
+
     # Кэш ответов ESI — обычный dict в памяти процесса, один на приложение.
     # Умирает вместе с процессом; постоянное хранилище цен появится на этапе 7.
     from app.services.cache import TTLCache

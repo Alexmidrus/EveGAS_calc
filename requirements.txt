@@ -3,5 +3,11 @@ asgiref>=3.8      # async-режим Flask, приходит и транзито
 httpx>=0.27
 waitress>=3.0
 
+# База данных (с версии 0.1.0). Один код на SQLite, MariaDB, MySQL и Postgres.
+SQLAlchemy>=2.0
+alembic>=1.13
+psycopg[binary]>=3.1   # драйвер Postgres
+PyMySQL>=1.1           # драйвер MySQL и MariaDB, чистый Python
+
 # dev
 pytest>=8.0

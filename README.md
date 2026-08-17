@@ -89,6 +89,40 @@ python -c "import secrets; print(secrets.token_urlsafe(32))"
 ошибки. SQLite в проде отвергается потому, что сборщик цен пишет из отдельного
 процесса одновременно с веб-приложением, и такую запись SQLite не выдерживает.
 
+## База данных
+
+С версии 0.1.0 приложению нужна база: в ней будут жить собранные цены и настройки
+вошедших пользователей. В dev это SQLite-файл в `var/`, он создаётся сам. В prod —
+MariaDB, MySQL или Postgres, адрес приходит в `DATABASE_URL`.
+
+Схема одна на все четыре СУБД, различия берёт на себя SQLAlchemy. Меняется схема
+только миграциями Alembic — руками таблицы не правят.
+
+Накатить схему:
+
+```bash
+alembic upgrade head
+```
+
+На проде то же самое с профилем:
+
+```bash
+APP_ENV=prod alembic upgrade head
+```
+
+Адрес базы Alembic берёт из конфигурации приложения, а не из `alembic.ini`: две
+записи одного адреса рано или поздно разъезжаются. Строка `sqlalchemy.url` в
+`alembic.ini` намеренно пустая.
+
+Примеры адресов:
+
+```
+postgresql+psycopg://user:password@localhost:5432/evegas
+mysql+pymysql://user:password@localhost:3306/evegas
+```
+
+Откат последней миграции — `alembic downgrade -1`, полный откат — `alembic downgrade base`.
+
 ## Запуск
 
 Локально:
