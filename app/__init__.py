@@ -1,17 +1,25 @@
 """Фабрика приложения."""
 
-from pathlib import Path
+from collections.abc import Mapping
+from typing import Any
 
 from flask import Flask
 
-# Корень репозитория — на уровень выше пакета app/
-BASE_DIR = Path(__file__).resolve().parent.parent
+from app.config import BASE_DIR, build_config
+
+__all__ = ["BASE_DIR", "create_app"]
 
 
-def create_app() -> Flask:
-    """Собирает и возвращает приложение: конфиг, фильтры, маршруты."""
+def create_app(config: Mapping[str, Any] | None = None) -> Flask:
+    """Собирает и возвращает приложение: конфиг, фильтры, маршруты.
+
+    config — готовая конфигурация вместо сборки из окружения. Нужна тестам,
+    чтобы не зависеть от переменных окружения и от чужого config.py.
+    """
     app = Flask(__name__)
-    _load_config(app)
+    app.config.update(build_config() if config is None else config)
+    for warning in app.config.get("CONFIG_WARNINGS", ()):
+        app.logger.warning(warning)
 
     # Числа в шаблонах — только через эти фильтры (правило проекта)
     from app import formatting
@@ -21,7 +29,7 @@ def create_app() -> Flask:
     app.add_template_filter(formatting.fmt_percent, "pct")
 
     # Кэш ответов ESI — обычный dict в памяти процесса, один на приложение.
-    # Базы данных в проекте нет, кэш умирает вместе с процессом (CLAUDE.md).
+    # Умирает вместе с процессом; постоянное хранилище цен появится на этапе 7.
     from app.services.cache import TTLCache
     from app.services.esi import DEFAULT_CACHE_TTL
 
@@ -34,30 +42,3 @@ def create_app() -> Flask:
     app.register_blueprint(bp)
 
     return app
-
-
-def _load_config(app: Flask) -> None:
-    """Читает config.py, а при его отсутствии — config.example.py.
-
-    Работать без своего конфига можно, но об этом надо сказать вслух:
-    в шаблоне лежит безликий ESI_USER_AGENT, который на этапе 3 попадёт
-    под рейт-лимит API.
-    """
-    config = BASE_DIR / "config.py"
-    example = BASE_DIR / "config.example.py"
-
-    if config.exists():
-        app.config.from_pyfile(str(config))
-        return
-
-    if not example.exists():
-        raise RuntimeError(
-            f"Не найден ни {config.name}, ни {example.name} в {BASE_DIR}. "
-            f"Приложению неоткуда взять настройки."
-        )
-
-    app.config.from_pyfile(str(example))
-    app.logger.warning(
-        "config.py не найден — взяты значения из config.example.py. "
-        "Скопируй шаблон в config.py и подставь свой контакт в ESI_USER_AGENT."
-    )
