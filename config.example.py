@@ -2,7 +2,7 @@
 
 # Обязательно подставь свой контакт — этого требует API EVE Online.
 # Безликие User-Agent попадают под рейт-лимит.
-ESI_USER_AGENT = "gascalc/0.1 (+https://github.com/USER/gascalc; you@example.com)"
+ESI_USER_AGENT = "EveGAS_calc/0.0.1 (+https://github.com/USER/EveGAS_calc; you@example.com)"
 
 # Дата, на которую написан клиент ESI. Фиксирует поведение API.
 #

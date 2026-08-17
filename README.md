@@ -1,4 +1,4 @@
-# gascalc
+# EveGAS_calc
 
 Калькулятор выгодности закупки газа в EVE Online.
 
@@ -17,8 +17,8 @@
 ## Установка
 
 ```bash
-git clone <repo>
-cd gascalc
+git clone https://github.com/Alexmidrus/EveGAS_calc.git
+cd EveGAS_calc
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 cp config.example.py config.py
@@ -88,6 +88,12 @@ waitress-serve --host=0.0.0.0 --port=8080 --threads=8 --call app:create_app
   запрос уходит только по кнопке.
 - **`ESI_COMPATIBILITY_DATE` не должна быть в будущем.** ESI считает текущий день
   по UTC-11 и на завтрашнюю дату отвечает `400`. Подробности — `docs/ESI.md` §2.
+
+## Лицензия
+
+MIT — см. [LICENSE](LICENSE). Пользоваться, изменять и распространять может кто угодно,
+в том числе в коммерческих целях. Единственное условие: сохранить текст лицензии
+и указание авторства оригинала.
 
 ## Документация
 

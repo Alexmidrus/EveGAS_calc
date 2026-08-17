@@ -1,4 +1,4 @@
-# CLAUDE.md — правила работы над проектом gascalc
+# CLAUDE.md — правила работы над проектом EveGAS_calc
 
 ## Что это
 
@@ -34,7 +34,7 @@ pytest (тесты)
 ## Структура проекта
 
 ```
-gascalc/
+EveGAS_calc/
 ├── run.py                      точка входа для локального запуска
 ├── requirements.txt
 ├── config.example.py           шаблон конфига, копируется в config.py

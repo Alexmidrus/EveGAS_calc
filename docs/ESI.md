@@ -34,7 +34,7 @@ GET https://esi.evetech.net/markets/{region_id}/orders/
 
 ```python
 ESI_HEADERS = {
-    "User-Agent": "gascalc/0.1 (+https://github.com/USER/gascalc; contact@example.com)",
+    "User-Agent": "EveGAS_calc/0.0.1 (+https://github.com/USER/EveGAS_calc; contact@example.com)",
     "X-Compatibility-Date": "2026-08-13",
     "Accept": "application/json",
 }
