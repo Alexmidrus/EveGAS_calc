@@ -24,6 +24,7 @@ DEFAULT_TIMEOUT = 15.0
 DEFAULT_CACHE_TTL = 300.0
 
 ORDERS_PATH = "/markets/{region_id}/orders/"
+HISTORY_PATH = "/markets/{region_id}/history/"
 
 # Ретраи: только на 5xx, до двух повторов с экспоненциальной паузой (ESI §2).
 MAX_RETRIES = 2
@@ -141,8 +142,32 @@ async def _request_page(
 
     Ответ 304 возвращается как есть — это успех условного запроса, а не ошибка.
     """
-    url = settings.base_url + ORDERS_PATH.format(region_id=region_id)
-    params = {"type_id": type_id, "order_type": "all", "page": page}
+    return await _request(
+        client,
+        settings,
+        settings.base_url + ORDERS_PATH.format(region_id=region_id),
+        {"type_id": type_id, "order_type": "all", "page": page},
+        sleep=sleep,
+        extra_headers=extra_headers,
+        what="ордеров",
+    )
+
+
+async def _request(
+    client: httpx.AsyncClient,
+    settings: EsiSettings,
+    url: str,
+    params: Mapping[str, object],
+    *,
+    sleep: Callable[[float], Awaitable[None]],
+    extra_headers: Mapping[str, str] | None = None,
+    what: str = "данных",
+) -> httpx.Response:
+    """Единственный путь к сети: заголовки, ретраи на 5xx, разбор лимитов.
+
+    Через него ходят и ордера, и история. Дублировать здесь логику ретраев
+    нельзя: ровно на этом уже терялись повторы для первой страницы.
+    """
     headers = settings.headers() | dict(extra_headers or {})
 
     last_status = 0
@@ -170,7 +195,7 @@ async def _request_page(
                 f"{MAX_RETRIES + 1} попытки подряд не прошли"
             )
         if response.status_code >= 400:
-            raise EsiError(f"ESI ответил {response.status_code} на запрос ордеров")
+            raise EsiError(f"ESI ответил {response.status_code} на запрос {what}")
         return response
 
     raise EsiError(f"ESI недоступен ({last_status})")  # недостижимо, но без «а вдруг»
@@ -209,6 +234,109 @@ def _expires_at(response: httpx.Response) -> datetime | None:
         return parsedate_to_datetime(raw).astimezone(UTC).replace(tzinfo=None)
     except (TypeError, ValueError):
         return None
+
+
+@dataclass(frozen=True, slots=True)
+class HistorySnapshot:
+    """Ответ на условный запрос истории сделок (ESI §5).
+
+    days — дневные итоги как их отдал ESI, от старых к новым. not_modified
+    означает «с прошлого раза ничего не изменилось»: за сутки история меняется
+    ровно один раз, в 11:05 UTC, поэтому 304 здесь норма, а не редкость.
+    """
+
+    region_id: int
+    type_id: int
+    days: list[dict] | None = None
+    etag: str | None = None
+    last_modified: str | None = None
+    expires_at: datetime | None = None
+    not_modified: bool = False
+    error: str | None = None
+    requests_made: int = 0
+    error_limit_remain: int | None = None
+    rate_limit_remain: int | None = None
+
+    @property
+    def ok(self) -> bool:
+        return self.error is None
+
+
+async def fetch_history_conditional(
+    client: httpx.AsyncClient,
+    settings: EsiSettings,
+    region_id: int,
+    type_id: int,
+    *,
+    etag: str | None = None,
+    last_modified: str | None = None,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+) -> HistorySnapshot:
+    """История сделок по типу в регионе (ESI §5.1).
+
+    Пагинации у эндпоинта нет: ответ приходит целиком, около 412 дней сразу.
+    Условных заголовков два — ETag здесь слабый (``W/"..."``), и это нормально,
+    но вместе с ним ESI отдаёт Last-Modified, который тоже стоит использовать.
+
+    В группы рейт-лимита эндпоинт не входит (проверено 18.08.2026, ESI §5.3),
+    но лимит ошибок общий, и заголовки лимитов возвращаются наверх так же,
+    как для ордеров.
+    """
+    conditional: dict[str, str] = {}
+    if etag:
+        conditional["If-None-Match"] = etag
+    if last_modified:
+        conditional["If-Modified-Since"] = last_modified
+
+    try:
+        response = await _request(
+            client,
+            settings,
+            settings.base_url + HISTORY_PATH.format(region_id=region_id),
+            {"type_id": type_id},
+            sleep=sleep,
+            extra_headers=conditional or None,
+            what="истории сделок",
+        )
+    except RateLimitedError:
+        raise
+    except EsiError as exc:
+        return HistorySnapshot(region_id, type_id, error=str(exc), requests_made=1)
+
+    limits = {
+        "error_limit_remain": error_limit_remaining(response),
+        "rate_limit_remain": rate_limit_remaining(response),
+    }
+
+    if response.status_code == 304:
+        return HistorySnapshot(
+            region_id,
+            type_id,
+            not_modified=True,
+            etag=etag,
+            last_modified=last_modified,
+            expires_at=_expires_at(response),
+            requests_made=1,
+            **limits,
+        )
+
+    try:
+        days = list(response.json())
+    except ValueError as exc:
+        return HistorySnapshot(
+            region_id, type_id, error=f"ESI вернул нечитаемый ответ: {exc}", requests_made=1
+        )
+
+    return HistorySnapshot(
+        region_id,
+        type_id,
+        days=days,
+        etag=response.headers.get("etag"),
+        last_modified=response.headers.get("last-modified"),
+        expires_at=_expires_at(response),
+        requests_made=1,
+        **limits,
+    )
 
 
 async def fetch_orders_conditional(

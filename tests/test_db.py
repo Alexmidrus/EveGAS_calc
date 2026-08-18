@@ -83,6 +83,8 @@ class TestSchema:
         assert set(inspect(engine).get_table_names()) == {
             "collection_run",
             "market_snapshot",
+            "market_history",
+            "market_history_state",
             "user_account",
             "user_settings",
             "user_freight_rate",

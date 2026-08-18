@@ -15,12 +15,13 @@
 
 import json
 from collections.abc import Iterable
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 from sqlalchemy import (
     BigInteger,
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
     Index,
@@ -29,6 +30,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -56,7 +58,7 @@ class Base(DeclarativeBase):
 
 
 class CollectionRun(Base):
-    """Один запуск сборщика цен. Нужен, чтобы видеть, живёт ли сбор вообще."""
+    """Один запуск сборщика. Нужен, чтобы видеть, живёт ли сбор вообще."""
 
     __tablename__ = "collection_run"
     __table_args__ = (
@@ -64,9 +66,17 @@ class CollectionRun(Base):
             "status IN ('running', 'ok', 'partial', 'aborted')",
             name="collection_run_status",
         ),
+        CheckConstraint(
+            "kind IN ('orders', 'history')",
+            name="collection_run_kind",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # Сборщиков два, и ходят они с разной частотой: стакан каждые 30 минут,
+    # история сделок раз в сутки (ESI §1). Без этого поля «время последнего
+    # успешного сбора» на /healthz смешивало бы их в одну кучу.
+    kind: Mapped[str] = mapped_column(String(16), default="orders")
     started_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
     # running — идёт прямо сейчас, ok — всё собрано, partial — часть хабов
@@ -74,6 +84,7 @@ class CollectionRun(Base):
     status: Mapped[str] = mapped_column(String(16), default="running")
     requests_made: Mapped[int] = mapped_column(Integer, default=0)
     errors_count: Mapped[int] = mapped_column(Integer, default=0)
+    # Для kind='orders' — срезы стакана, для kind='history' — дни истории
     snapshots_written: Mapped[int] = mapped_column(Integer, default=0)
     note: Mapped[str | None] = mapped_column(String(500), default=None)
 
@@ -121,6 +132,60 @@ class MarketSnapshot(Base):
     run_id: Mapped[int | None] = mapped_column(
         ForeignKey("collection_run.id", ondelete="SET NULL"), default=None
     )
+
+
+class MarketHistory(Base):
+    """Дневной итог реальных сделок по типу в регионе (ESI §5).
+
+    Ключ регионный, а не по хабу: эндпоинт истории отдаёт данные на регион
+    целиком, разбивки по станциям в нём нет. Сейчас пять хабов лежат в пяти
+    разных регионах и одно однозначно отображается в другое, но это свойство
+    нашего списка хабов, а не API.
+
+    Строка на сутки: ESI обновляет её раз в день в 11:05 UTC, и сегодняшнего
+    дня в истории не бывает никогда.
+    """
+
+    __tablename__ = "market_history"
+    __table_args__ = (
+        UniqueConstraint("region_id", "type_id", "date"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    region_id: Mapped[int] = mapped_column(Integer)
+    type_id: Mapped[int] = mapped_column(Integer)
+    # Календарные сутки по UTC, как их отдаёт ESI
+    date: Mapped[date] = mapped_column(Date)
+    # Дневная средняя цена сделок. Чем именно она взвешена, документация ESI
+    # не пишет, и называть её VWAP оснований нет (ESI §5.2).
+    average: Mapped[Decimal] = mapped_column(MONEY)
+    highest: Mapped[Decimal] = mapped_column(MONEY)
+    lowest: Mapped[Decimal] = mapped_column(MONEY)
+    # Сколько юнитов реально сменило владельца за сутки
+    volume: Mapped[int] = mapped_column(BigInteger, default=0)
+    order_count: Mapped[int] = mapped_column(Integer, default=0)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class MarketHistoryState(Base):
+    """Состояние условных запросов истории по паре «регион + тип».
+
+    Отдельно от самих данных: ETag относится ко всему ответу, а не к строке-дню.
+    Здесь же лежит время последней проверки — на 304 данные не переписываются,
+    но факт «мы только что убедились, что копия актуальна» обязан сохраниться.
+    """
+
+    __tablename__ = "market_history_state"
+
+    region_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    type_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # ETag у этого эндпоинта слабый (W/"..."), и это нормально (ESI §5.3)
+    etag: Mapped[str | None] = mapped_column(String(128), default=None)
+    # Строкой ровно в том виде, в каком её отдал ESI: она уедет обратно
+    # в If-Modified-Since, и переформатировать её нам незачем
+    last_modified: Mapped[str | None] = mapped_column(String(64), default=None)
+    checked_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
 
 
 class UserAccount(Base):

@@ -13,6 +13,8 @@ from app.db.engine import (
 from app.db.models import (
     Base,
     CollectionRun,
+    MarketHistory,
+    MarketHistoryState,
     MarketSnapshot,
     UserAccount,
     UserFreightRate,
@@ -25,6 +27,8 @@ from app.db.models import (
 __all__ = [
     "Base",
     "CollectionRun",
+    "MarketHistory",
+    "MarketHistoryState",
     "MarketSnapshot",
     "UserAccount",
     "UserFreightRate",
