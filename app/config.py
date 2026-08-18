@@ -68,7 +68,7 @@ def _defaults(profile: str, base_dir: Path) -> dict[str, Any]:
     common: dict[str, Any] = {
         "APP_ENV": profile,
         "ESI_USER_AGENT": (
-            f"EveGAS_calc/{VERSION_MARK} (+https://github.com/USER/EveGAS_calc; you@example.com)"
+            f"GasLens/{VERSION_MARK} (+https://github.com/USER/GasLens; you@example.com)"
         ),
         # Дата не должна быть «в будущем»: ESI сравнивает её со своим днём
         # по UTC-11 и отвечает 400. Подробности — docs/ESI.md §2.

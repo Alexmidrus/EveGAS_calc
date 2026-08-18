@@ -75,6 +75,8 @@ button.fetch { margin-bottom: 0.5rem; }
 .indicator.htmx-request { display: inline; }
 
 .footnote { color: #666; font-size: 0.85em; margin: 0.5rem 0 0; }
+/* Подпись бренда рядом с названием */
+h1 small.by { font-size: 0.5em; font-weight: 400; color: #666; }
 small.shallow { display: block; color: #a05a00; font-weight: 400; }
 /* Диапазон реальных сделок под опорной ценой (ESI §5.5) */
 small.range { display: block; color: #666; font-weight: 400; }

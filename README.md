@@ -1,6 +1,6 @@
-# EveGAS_calc
+# EveCraft GasLens — EVE Online Gas Market Analyzer
 
-Калькулятор выгодности закупки газа в EVE Online.
+**GasLens by EveCraft** — калькулятор выгодности закупки газа в EVE Online.
 
 Сравнивает покупку сырого и сжатого газа по sell- и buy-ордерам в пяти основных
 трейд-хабах, с учётом потерь при разжатии и стоимости курьерской доставки.
@@ -198,7 +198,7 @@ Linux, `crontab -e`:
 Windows, Планировщик задач:
 
 ```bash
-schtasks /create /tn EveGAS-collect /sc minute /mo 30 /st 00:00 /tr "cmd /c cd /d C:\path\to\EveGAS_calc && .venv\Scripts\python.exe -m app.jobs.collect >> var\collect.log 2>&1"
+schtasks /create /tn GasLens-collect /sc minute /mo 30 /st 00:00 /tr "cmd /c cd /d C:\path\to\EveGAS_calc && .venv\Scripts\python.exe -m app.jobs.collect >> var\collect.log 2>&1"
 ```
 
 Переход в каталог проекта обязателен, и это не украшение. Планировщик
@@ -210,7 +210,7 @@ schtasks /create /tn EveGAS-collect /sc minute /mo 30 /st 00:00 /tr "cmd /c cd /
 Проверить, что задача заведена и когда отработает:
 
 ```bash
-schtasks /query /tn EveGAS-collect /v /fo list
+schtasks /query /tn GasLens-collect /v /fo list
 ```
 
 ### Коды возврата
@@ -261,7 +261,7 @@ Linux, `crontab -e`:
 Windows, Планировщик задач (время задаётся местное — 11:20 UTC пересчитай сам):
 
 ```bash
-schtasks /create /tn EveGAS-history /sc daily /st 14:20 /tr "cmd /c cd /d C:\path\to\EveGAS_calc && .venv\Scripts\python.exe -m app.jobs.collect_history >> var\collect_history.log 2>&1"
+schtasks /create /tn GasLens-history /sc daily /st 14:20 /tr "cmd /c cd /d C:\path\to\EveGAS_calc && .venv\Scripts\python.exe -m app.jobs.collect_history >> var\collect_history.log 2>&1"
 ```
 
 Коды возврата те же, что у сбора цен. Блокировка своя — `var/collect_history.lock`:

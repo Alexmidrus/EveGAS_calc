@@ -24,7 +24,7 @@ SETTINGS = sso.SsoSettings(
     client_id="abc451d512f347ad9854cd5623d4bf20",
     client_secret="секрет только в конфиге",
     redirect_uri="http://localhost:5000/sso/callback",
-    user_agent="EveGAS_calc/tests",
+    user_agent="GasLens/tests",
 )
 
 CHARACTER_ID = 2112625428
@@ -564,7 +564,7 @@ class TestSessionCookie:
                 "APP_ENV": "prod",
                 "SECRET_KEY": "x" * 32,
                 "DATABASE_URL": "postgresql+psycopg://u:p@localhost/db",
-                "ESI_USER_AGENT": "EveGAS_calc/{version} (+https://example.org; me@example.org)",
+                "ESI_USER_AGENT": "GasLens/{version} (+https://example.org; me@example.org)",
             },
             tmp_path,
         )

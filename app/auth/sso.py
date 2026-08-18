@@ -86,7 +86,7 @@ class SsoSettings:
             client_id=client_id,
             client_secret=client_secret,
             redirect_uri=redirect_uri,
-            user_agent=str(config.get("ESI_USER_AGENT") or "EveGAS_calc"),
+            user_agent=str(config.get("ESI_USER_AGENT") or "GasLens"),
         )
 
     @property

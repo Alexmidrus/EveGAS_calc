@@ -26,7 +26,7 @@ SECRET_KEY, DATABASE_URL, ESI_CLIENT_ID, ESI_CLIENT_SECRET. Подробност
 # Метку {version} подставляет приложение из app/version.py. Записанный сюда
 # руками номер отстанет в тот же день, когда версию поднимут, — на это
 # приложение ругается при старте.
-ESI_USER_AGENT = "EveGAS_calc/{version} (+https://github.com/USER/EveGAS_calc; you@example.com)"
+ESI_USER_AGENT = "GasLens/{version} (+https://github.com/USER/GasLens; you@example.com)"
 
 # Дата, на которую написан клиент ESI. Фиксирует поведение API.
 #

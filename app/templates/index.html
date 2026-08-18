@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>EveGAS_calc — калькулятор закупки газа</title>
+  <title>EveCraft GasLens — EVE Online Gas Market Analyzer</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body{% if character %} data-character="{{ character[0] }}"{% endif %}>
   <header class="topbar">
     <div>
-      <h1>EveGAS_calc</h1>
+      <h1>GasLens <small class="by">by EveCraft</small></h1>
       <p class="tagline">Где сегодня выгоднее купить газ: сырой против сжатого, пять хабов, доставка учтена.</p>
     </div>
     {# Вход нужен только ради хранения настроек. Без него работает всё. #}

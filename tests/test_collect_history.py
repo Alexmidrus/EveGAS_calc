@@ -26,7 +26,7 @@ from app.jobs import collect_history
 from app.services.esi import EsiSettings
 
 SETTINGS = EsiSettings(
-    user_agent="EveGAS_calc/tests (+https://example.invalid; tests@example.invalid)",
+    user_agent="GasLens/tests (+https://example.invalid; tests@example.invalid)",
     compatibility_date="2026-08-13",
 )
 

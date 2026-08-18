@@ -15,7 +15,7 @@ PROD_ENV = {
     "APP_ENV": "prod",
     "SECRET_KEY": "x" * 32,
     "DATABASE_URL": "postgresql+psycopg://user:pass@localhost/evegas",
-    "ESI_USER_AGENT": "EveGAS_calc/{version} (+https://example.org/app; me@example.org)",
+    "ESI_USER_AGENT": "GasLens/{version} (+https://example.org/app; me@example.org)",
 }
 
 
@@ -91,7 +91,7 @@ class TestUserAgentVersion:
 
     def test_default_carries_current_version(self, tmp_path):
         config = build_config({}, tmp_path)
-        assert f"EveGAS_calc/{__version__}" in config["ESI_USER_AGENT"]
+        assert f"GasLens/{__version__}" in config["ESI_USER_AGENT"]
 
     def test_foreign_user_agent_is_left_alone(self, tmp_path):
         """Чужую строку без метки не трогаем: это выбор владельца."""
