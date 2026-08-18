@@ -8,7 +8,9 @@
 не видна глазом, она просто даёт неправильный совет.
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass
+from decimal import Decimal
 from statistics import median
 
 from app.core.constants import ORDERBOOK_OUTLIER_FACTOR
@@ -216,3 +218,48 @@ def quote(orders: list[dict], hub: Hub, side: OrderSide, needed: int) -> Quote:
     price, filled = vwap(book, needed)
     available = sum(int(o["volume_remain"]) for o in book)
     return Quote(price=price, filled=filled, available=available, needed=needed)
+
+
+def quote_from_ladder(
+    levels: Sequence[tuple[Decimal, int, int]], side: OrderSide, needed: int
+) -> Quote:
+    """Разбор сохранённой лестницы под фактический объём (ROADMAP, этап 8).
+
+    Обратная сторона ladder_from_orders. Сборщик сложил в базу всё, что от
+    объёма не зависит: отбор по станции и радиусу, очистку от выбросов,
+    сортировку. Здесь доделывается то, что без объёма сделать было нельзя.
+
+    Для buy отсекаются уровни с min_volume больше нужного количества: такой
+    ордер физически не исполнить (ESI §4). Для sell min_volume не смотрим —
+    в правилах разбора он относится только к buy.
+
+    Цена возвращается float: ядро расчёта считает во float по правилу проекта,
+    а Decimal нужен был, чтобы копейки пережили хранение.
+    """
+    if needed <= 0:
+        raise ValueError(f"Нужное количество должно быть больше нуля, получено: {needed}")
+
+    usable = [
+        (price, volume)
+        for price, volume, min_volume in levels
+        if side is not OrderSide.BUY or min_volume <= needed
+    ]
+
+    filled = 0
+    cost = 0.0
+    for price, volume in usable:
+        take = min(volume, needed - filled)
+        if take <= 0:
+            continue
+        cost += take * float(price)
+        filled += take
+        if filled >= needed:
+            break
+
+    available = sum(volume for _price, volume in usable)
+    return Quote(
+        price=None if filled == 0 else cost / filled,
+        filled=filled,
+        available=available,
+        needed=needed,
+    )

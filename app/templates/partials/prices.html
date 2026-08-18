@@ -1,4 +1,4 @@
-{# Блок 2: сетка цен 5×5 (SPEC §4). Отдаётся и при GET /, и в ответ на POST /fetch-prices. #}
+{# Блок 2: сетка цен 5×5 (SPEC §4). Отдаётся при GET / и при POST /price-grid. #}
 <table class="price-grid">
   <thead>
     <tr>
@@ -18,8 +18,12 @@
         <input type="text" inputmode="decimal" data-price-cell
                name="{{ row.hub.key }}_{{ suffix }}"
                value="{{ cell.value }}"
-               {% if cell.fetched %}class="fetched" title="Подтянуто из ESI, можно перебить"{% endif %}>
-        {# Глубина стакана известна только для подтянутых цен; при ручной правке JS её стирает #}
+               {% if cell.auto %}class="fetched" title="Из базы, можно перебить"{% endif %}>
+        {# Пометка «значение из базы»: по ней сервер понимает, какие ячейки можно
+           пересчитать под новый объём, а какие правил человек. JS снимает её при вводе. #}
+        <input type="hidden" name="{{ row.hub.key }}_{{ suffix }}_auto"
+               value="{% if cell.auto %}1{% endif %}">
+        {# Глубина стакана известна только для цен из базы; при ручной правке JS её стирает #}
         <input type="hidden" name="{{ row.hub.key }}_{{ suffix }}_depth"
                value="{% if cell.depth is not none %}{{ cell.depth }}{% endif %}">
       </td>
@@ -29,9 +33,9 @@
   </tbody>
 </table>
 
-{% if fetch_notes %}
+{% if grid_notes %}
 <ul class="notes">
-  {% for note in fetch_notes %}<li>{{ note }}</li>{% endfor %}
+  {% for note in grid_notes %}<li>{{ note }}</li>{% endfor %}
 </ul>
 {% endif %}
 

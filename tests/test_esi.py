@@ -11,7 +11,6 @@ import httpx
 import pytest
 
 from app.services import esi
-from app.services.cache import TTLCache
 
 SETTINGS = esi.EsiSettings(
     user_agent="gascalc-tests/0.1 (+https://example.invalid; tests@example.invalid)",
@@ -58,7 +57,7 @@ def test_required_headers_are_sent():
 
     async def scenario():
         async with client_for(handler) as client:
-            return await esi.fetch_orders(client, SETTINGS, 10000002, 62406, sleep=no_sleep)
+            return await esi.fetch_orders_conditional(client, SETTINGS, 10000002, 62406, sleep=no_sleep)
 
     result = run(scenario())
     assert result.ok
@@ -101,7 +100,7 @@ def test_all_pages_are_fetched():
 
     async def scenario():
         async with client_for(handler) as client:
-            return await esi.fetch_orders(client, SETTINGS, 10000002, 62406, sleep=no_sleep)
+            return await esi.fetch_orders_conditional(client, SETTINGS, 10000002, 62406, sleep=no_sleep)
 
     result = run(scenario())
     assert pages_seen == ["1", "2", "3"]
@@ -120,7 +119,7 @@ def test_server_error_is_retried_twice_then_reported():
 
     async def scenario():
         async with client_for(handler) as client:
-            return await esi.fetch_orders(client, SETTINGS, 10000002, 62406, sleep=no_sleep)
+            return await esi.fetch_orders_conditional(client, SETTINGS, 10000002, 62406, sleep=no_sleep)
 
     result = run(scenario())
     assert len(calls) == esi.MAX_RETRIES + 1 == 3
@@ -139,7 +138,7 @@ def test_server_error_recovers_on_retry():
 
     async def scenario():
         async with client_for(handler) as client:
-            return await esi.fetch_orders(client, SETTINGS, 10000002, 62406, sleep=no_sleep)
+            return await esi.fetch_orders_conditional(client, SETTINGS, 10000002, 62406, sleep=no_sleep)
 
     result = run(scenario())
     assert len(calls) == 2
@@ -156,12 +155,12 @@ def test_rate_limit_is_not_retried(status):
 
     async def scenario():
         async with client_for(handler) as client:
-            return await esi.fetch_orders(client, SETTINGS, 10000002, 62406, sleep=no_sleep)
+            return await esi.fetch_orders_conditional(client, SETTINGS, 10000002, 62406, sleep=no_sleep)
 
-    result = run(scenario())
+    with pytest.raises(esi.RateLimitedError) as exc:
+        run(scenario())
     assert len(calls) == 1  # ни одного повтора
-    assert not result.ok
-    assert str(status) in result.error
+    assert str(status) in str(exc.value)
 
 
 def test_timeout_is_reported_not_raised():
@@ -170,7 +169,7 @@ def test_timeout_is_reported_not_raised():
 
     async def scenario():
         async with client_for(handler) as client:
-            return await esi.fetch_orders(client, SETTINGS, 10000002, 62406, sleep=no_sleep)
+            return await esi.fetch_orders_conditional(client, SETTINGS, 10000002, 62406, sleep=no_sleep)
 
     result = run(scenario())
     assert not result.ok
@@ -183,143 +182,8 @@ def test_broken_json_is_reported():
 
     async def scenario():
         async with client_for(handler) as client:
-            return await esi.fetch_orders(client, SETTINGS, 10000002, 62406, sleep=no_sleep)
+            return await esi.fetch_orders_conditional(client, SETTINGS, 10000002, 62406, sleep=no_sleep)
 
     result = run(scenario())
     assert not result.ok
     assert "нечитаемый" in result.error
-
-
-# --- Кэш ---
-
-
-def test_second_call_comes_from_cache():
-    calls: list[int] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        calls.append(1)
-        return httpx.Response(200, json=[ORDER])
-
-    cache: TTLCache[esi.CacheKey, list[dict]] = TTLCache(default_ttl=300)
-
-    async def scenario():
-        async with client_for(handler) as client:
-            first = await esi.fetch_orders(
-                client, SETTINGS, 10000002, 62406, cache=cache, sleep=no_sleep
-            )
-            second = await esi.fetch_orders(
-                client, SETTINGS, 10000002, 62406, cache=cache, sleep=no_sleep
-            )
-            return first, second
-
-    first, second = run(scenario())
-    assert len(calls) == 1
-    assert not first.from_cache
-    assert second.from_cache
-    assert second.orders == first.orders
-
-
-def test_failed_request_is_not_cached():
-    calls: list[int] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        calls.append(1)
-        return httpx.Response(500)
-
-    cache: TTLCache[esi.CacheKey, list[dict]] = TTLCache(default_ttl=300)
-
-    async def scenario():
-        async with client_for(handler) as client:
-            await esi.fetch_orders(client, SETTINGS, 10000002, 62406, cache=cache, sleep=no_sleep)
-            await esi.fetch_orders(client, SETTINGS, 10000002, 62406, cache=cache, sleep=no_sleep)
-
-    run(scenario())
-    assert len(cache) == 0
-    assert len(calls) == 6  # два раза по три попытки, ошибка не закэширована
-
-
-def test_cache_ttl_follows_expires_header():
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200,
-            json=[ORDER],
-            headers={
-                "date": "Fri, 14 Aug 2026 05:00:00 GMT",
-                "expires": "Fri, 14 Aug 2026 05:04:00 GMT",
-            },
-        )
-
-    now = [1000.0]
-    cache: TTLCache[esi.CacheKey, list[dict]] = TTLCache(
-        default_ttl=300, clock=lambda: now[0]
-    )
-
-    async def scenario():
-        async with client_for(handler) as client:
-            await esi.fetch_orders(client, SETTINGS, 10000002, 62406, cache=cache, sleep=no_sleep)
-
-    run(scenario())
-    now[0] += 239
-    assert cache.get((10000002, 62406)) is not None  # 240 секунд из заголовка ещё не вышли
-    now[0] += 2
-    assert cache.get((10000002, 62406)) is None
-
-
-# --- Параллельная выдача (ESI §6) ---
-
-
-def test_one_failing_region_does_not_break_the_others():
-    """Требование ESI §6: падение одного хаба не роняет остальные девять запросов."""
-    broken_region = 10000030
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        if f"/markets/{broken_region}/" in request.url.path:
-            raise httpx.ConnectError("сеть отвалилась", request=request)
-        return httpx.Response(200, json=[ORDER])
-
-    pairs = [
-        (10000002, 62406),
-        (10000043, 62406),
-        (10000032, 62406),
-        (broken_region, 62406),
-        (10000042, 62406),
-    ]
-
-    async def scenario():
-        async with client_for(handler) as client:
-            return await esi.fetch_many(pairs, SETTINGS, client=client, sleep=no_sleep)
-
-    results = run(scenario())
-    assert len(results) == 5
-    assert not results[(broken_region, 62406)].ok
-    assert results[(broken_region, 62406)].error
-    assert all(results[pair].ok for pair in pairs if pair[0] != broken_region)
-
-
-def test_unexpected_exception_becomes_a_result_not_a_crash():
-    """Даже неожиданное исключение внутри gather превращается в ошибку по хабу."""
-
-    async def boom(*args, **kwargs):
-        raise RuntimeError("что-то совсем неожиданное")
-
-    pairs = [(10000002, 62406)]
-
-    async def scenario(monkeypatched):
-        return await esi.fetch_many(pairs, SETTINGS, client=monkeypatched, sleep=no_sleep)
-
-    original = esi.fetch_orders
-    esi.fetch_orders = boom  # type: ignore[assignment]
-    try:
-        def handler(request: httpx.Request) -> httpx.Response:
-            return httpx.Response(200, json=[ORDER])
-
-        async def wrapper():
-            async with client_for(handler) as client:
-                return await scenario(client)
-
-        results = run(wrapper())
-    finally:
-        esi.fetch_orders = original  # type: ignore[assignment]
-
-    assert not results[(10000002, 62406)].ok
-    assert "неожиданное" in results[(10000002, 62406)].error

@@ -1,0 +1,357 @@
+"""Чтение цен из базы и сетка на странице (ROADMAP, этап 8).
+
+Сети здесь нет и быть не может: приложение к ESI больше не ходит вообще.
+База — SQLite в памяти, срезы кладутся руками.
+"""
+
+import re
+from datetime import timedelta
+from decimal import Decimal
+
+import pytest
+
+from app import create_app
+from app.core import catalog
+from app.core.models import GasForm, OrderSide
+from app.db import Base, CollectionRun, MarketSnapshot, dump_ladder, session_scope, utcnow
+from app.services.orderbook import quote_from_ladder
+from app.services.prices import load_price_book
+
+C320 = catalog.gas_by_key("fullerite_c320")
+HUBS = catalog.hubs()
+TYPE_IDS = {GasForm.RAW: C320.raw_type_id, GasForm.COMPRESSED: C320.compressed_type_id}
+NEEDED = {GasForm.RAW: 50_000, GasForm.COMPRESSED: 56_180}
+
+CONTROL_FORM = {
+    "gas": "fullerite_c320",
+    "n_units": "50000",
+    "structure": "athanor",
+    "gde_level": "5",
+    "broker_fee": "1.5",
+    "collateral_pct": "0.5",
+}
+
+
+@pytest.fixture
+def app():
+    application = create_app(
+        {
+            "APP_ENV": "dev",
+            "DATABASE_URL": "sqlite:///:memory:",
+            "PRICE_MAX_AGE_MINUTES": 90,
+            "TESTING": True,
+        }
+    )
+    Base.metadata.create_all(application.extensions["db_engine"])
+    return application
+
+
+@pytest.fixture
+def engine(app):
+    return app.extensions["db_engine"]
+
+
+@pytest.fixture
+def client(app):
+    return app.test_client()
+
+
+def add_snapshot(engine, hub_key, form, side, levels, *, age_minutes=0):
+    with session_scope(engine) as session:
+        session.add(
+            MarketSnapshot(
+                hub_key=hub_key,
+                type_id=TYPE_IDS[form],
+                side=side.value,
+                collected_at=utcnow() - timedelta(minutes=age_minutes),
+                ladder=dump_ladder(levels),
+                total_volume=sum(v for _p, v, _m in levels),
+                order_count=len(levels),
+            )
+        )
+
+
+def fill_all(engine, *, age_minutes=0, price="2750.00"):
+    """Полная сетка: все хабы, обе формы, обе стороны."""
+    for hub in HUBS:
+        for form in (GasForm.RAW, GasForm.COMPRESSED):
+            for side in OrderSide:
+                add_snapshot(
+                    engine, hub.key, form, side,
+                    [(price, 1_000_000, 1)], age_minutes=age_minutes,
+                )
+
+
+class TestQuoteFromLadder:
+    """Обратная сторона того, что сложил сборщик."""
+
+    def test_vwap_over_levels(self):
+        levels = [(Decimal("2750.00"), 12_000, 1), (Decimal("2760.00"), 50_000, 1)]
+        quote = quote_from_ladder(levels, OrderSide.SELL, 20_000)
+        # 12 000 юнитов по 2750 и ещё 8 000 по 2760
+        assert quote.price == pytest.approx((12_000 * 2750 + 8_000 * 2760) / 20_000)
+        assert quote.filled == 20_000
+
+    def test_depth_shortfall_is_visible(self):
+        quote = quote_from_ladder([(Decimal("2750.00"), 100, 1)], OrderSide.SELL, 50_000)
+        assert quote.shallow
+        assert quote.filled == 100
+        assert quote.available == 100
+
+    def test_buy_min_volume_filter(self):
+        """Ордер с min_volume больше нужного исполнить нельзя (ESI §4).
+        Ради этого min_volume и хранится третьим числом уровня."""
+        levels = [(Decimal("2400.00"), 5_000, 100_000), (Decimal("2300.00"), 5_000, 1)]
+        quote = quote_from_ladder(levels, OrderSide.BUY, 1_000)
+        assert quote.price == pytest.approx(2300.0)  # первый уровень отсечён
+
+    def test_sell_ignores_min_volume(self):
+        """Для sell правило про min_volume не действует."""
+        levels = [(Decimal("2750.00"), 5_000, 100_000)]
+        assert quote_from_ladder(levels, OrderSide.SELL, 1_000).price == pytest.approx(2750.0)
+
+    def test_empty_ladder(self):
+        quote = quote_from_ladder([], OrderSide.SELL, 1_000)
+        assert quote.price is None
+        assert quote.available == 0
+
+    def test_zero_needed_rejected(self):
+        with pytest.raises(ValueError):
+            quote_from_ladder([], OrderSide.SELL, 0)
+
+
+class TestPriceBook:
+    """Что база отдаёт приложению."""
+
+    def test_empty_database(self, engine):
+        book = load_price_book(engine, HUBS, TYPE_IDS, NEEDED)
+        assert book.empty
+        assert book.age() is None
+        assert len(book.missing_hubs) == len(HUBS)
+
+    def test_reads_all_hubs(self, engine):
+        fill_all(engine)
+        book = load_price_book(engine, HUBS, TYPE_IDS, NEEDED)
+        assert len(book.quotes) == len(HUBS) * 4
+        assert book.missing_hubs == ()
+
+    def test_takes_newest_snapshot(self, engine):
+        add_snapshot(engine, "jita", GasForm.COMPRESSED, OrderSide.SELL,
+                     [("3000.00", 100_000, 1)], age_minutes=60)
+        add_snapshot(engine, "jita", GasForm.COMPRESSED, OrderSide.SELL,
+                     [("2750.00", 100_000, 1)], age_minutes=1)
+        book = load_price_book(engine, HUBS, TYPE_IDS, NEEDED)
+        assert book.get("jita", GasForm.COMPRESSED, OrderSide.SELL).price == pytest.approx(2750.0)
+
+    def test_missing_hub_is_named(self, engine):
+        add_snapshot(engine, "jita", GasForm.COMPRESSED, OrderSide.SELL, [("2750.00", 10**6, 1)])
+        book = load_price_book(engine, HUBS, TYPE_IDS, NEEDED)
+        assert "hek" in book.missing_hubs
+        assert "jita" not in book.missing_hubs
+
+    def test_empty_book_is_not_zero(self, engine):
+        """Пустая книга — это данные: газ в хабе просто не продают.
+        Ячейка обязана остаться пустой, а не показать ноль."""
+        add_snapshot(engine, "hek", GasForm.COMPRESSED, OrderSide.SELL, [])
+        book = load_price_book(engine, HUBS, TYPE_IDS, NEEDED)
+        assert book.get("hek", GasForm.COMPRESSED, OrderSide.SELL) is None
+        assert "hek" not in book.missing_hubs  # данные есть, просто ордеров нет
+
+    def test_price_depends_on_needed(self, engine):
+        """Средневзвешенная считается под фактический объём — в этом весь смысл
+        хранения лестницы вместо готовой цены."""
+        add_snapshot(engine, "jita", GasForm.COMPRESSED, OrderSide.SELL,
+                     [("2750.00", 10_000, 1), ("3500.00", 10_000_000, 1)])
+        small = load_price_book(engine, HUBS, TYPE_IDS, {GasForm.RAW: 1, GasForm.COMPRESSED: 10_000})
+        big = load_price_book(engine, HUBS, TYPE_IDS, {GasForm.RAW: 1, GasForm.COMPRESSED: 1_000_000})
+        assert small.get("jita", GasForm.COMPRESSED, OrderSide.SELL).price == pytest.approx(2750.0)
+        assert big.get("jita", GasForm.COMPRESSED, OrderSide.SELL).price > 3400
+
+    def test_staleness(self, engine):
+        fill_all(engine, age_minutes=200)
+        book = load_price_book(engine, HUBS, TYPE_IDS, NEEDED)
+        assert book.is_stale(timedelta(minutes=90))
+        assert not book.is_stale(timedelta(minutes=300))
+
+    def test_broken_database_is_reported(self, app):
+        """Недоступная база не должна ронять расчёт по ручным ценам."""
+        Base.metadata.drop_all(app.extensions["db_engine"])
+        book = load_price_book(app.extensions["db_engine"], HUBS, TYPE_IDS, NEEDED)
+        assert book.error is not None
+        assert book.empty
+
+
+class TestPage:
+    """Что видно на экране."""
+
+    def test_esi_button_is_gone(self, client):
+        """Пользователь больше не может инициировать обращение к ESI."""
+        html = client.get("/").get_data(as_text=True)
+        assert "Подтянуть цены" not in html
+        assert "/fetch-prices" not in html
+
+    def test_fetch_route_removed(self, client):
+        assert client.post("/fetch-prices", data=CONTROL_FORM).status_code == 404
+
+    def test_empty_database_explains_itself(self, client):
+        html = client.get("/").get_data(as_text=True)
+        assert "Цены ещё не собраны" in html
+
+    def test_prices_appear_in_grid(self, client, engine):
+        fill_all(engine, price="2750.00")
+        html = client.get("/").get_data(as_text=True)
+        assert "2 750" in html
+        assert "Цены из базы, собраны" in html
+
+    def test_age_is_shown(self, client, engine):
+        fill_all(engine, age_minutes=42)
+        assert "42 мин назад" in client.get("/").get_data(as_text=True)
+
+    def test_stale_data_is_flagged(self, client, engine):
+        fill_all(engine, age_minutes=500)
+        html = client.get("/").get_data(as_text=True)
+        assert "Данные устарели" in html
+        assert "cron" in html
+
+    def test_grid_has_its_own_target(self, client):
+        """Регрессия. Форма задаёт hx-target="#results", и потомки его наследуют:
+        без своего target ответ с сеткой уезжал в блок результата, а сетка
+        молча оставалась со старыми ценами."""
+        html = client.get("/").get_data(as_text=True)
+        grid = html[html.index('id="price-grid"') : html.index('id="price-grid"') + 400]
+        assert "hx-target=" in grid
+
+    def test_form_listens_for_recalc(self, client):
+        """После перерисовки сетки результат обязан пересчитаться: иначе на
+        экране останутся цифры по прежним ценам."""
+        html = client.get("/").get_data(as_text=True)
+        assert "recalc" in html
+
+    def test_missing_hub_is_named_not_zeroed(self, client, engine):
+        for form in (GasForm.RAW, GasForm.COMPRESSED):
+            for side in OrderSide:
+                add_snapshot(engine, "jita", form, side, [("2750.00", 10**6, 1)])
+        html = client.get("/").get_data(as_text=True)
+        assert "Данных нет по хабам" in html
+        assert "Hek" in html
+
+
+def cell_value(html: str, name: str) -> str:
+    """Значение ценовой ячейки по имени поля.
+
+    Искать подстроку value="..." по всему ответу нельзя: то же значение
+    встречается в скрытых полях auto и depth соседних ячеек.
+    """
+    match = re.search(
+        r'name="' + re.escape(name) + r'"\s+value="([^"]*)"', html
+    )
+    assert match is not None, f"в ответе нет ячейки {name}"
+    return match.group(1)
+
+
+class TestGridRefresh:
+    """POST /price-grid — пересчёт сетки под новую потребность."""
+
+    def test_recomputes_for_new_amount(self, client, engine):
+        add_snapshot(engine, "jita", GasForm.COMPRESSED, OrderSide.SELL,
+                     [("2750.00", 10_000, 1), ("9000.00", 10_000_000, 1)])
+        small = client.post("/price-grid", data=dict(CONTROL_FORM, n_units="1000"))
+        big = client.post("/price-grid", data=dict(CONTROL_FORM, n_units="500000"))
+        assert "2 750" in small.get_data(as_text=True)
+        assert "2 750" not in big.get_data(as_text=True)
+
+    def test_manual_value_survives_refresh(self, client, engine):
+        """Ручной ввод главнее: ячейку без пометки auto сервер не трогает."""
+        fill_all(engine)
+        form = dict(CONTROL_FORM, jita_compressed_sell="1234", n_units="60000")
+        html = client.post("/price-grid", data=form).get_data(as_text=True)
+        assert cell_value(html, "jita_compressed_sell") == "1234"
+
+    def test_auto_value_is_replaced(self, client, engine):
+        """А помеченную auto — обязан пересчитать."""
+        fill_all(engine, price="2750.00")
+        form = dict(
+            CONTROL_FORM,
+            jita_compressed_sell="1",
+            jita_compressed_sell_auto="1",
+        )
+        html = client.post("/price-grid", data=form).get_data(as_text=True)
+        assert cell_value(html, "jita_compressed_sell") == "2 750"
+
+    def test_freight_rates_survive(self, client, engine):
+        fill_all(engine)
+        html = client.post(
+            "/price-grid", data=dict(CONTROL_FORM, jita_rate="500")
+        ).get_data(as_text=True)
+        assert cell_value(html, "jita_rate") == "500"
+
+    def test_broken_form_does_not_wipe_grid(self, client, engine):
+        fill_all(engine)
+        form = dict(CONTROL_FORM, n_units="сколько-нибудь", jita_rate="500")
+        html = client.post("/price-grid", data=form).get_data(as_text=True)
+        assert cell_value(html, "jita_rate") == "500"
+
+
+class TestCalculateUsesStoredPrices:
+    """Расчёт по ценам из базы: цифры доезжают до таблицы результата."""
+
+    def test_result_from_database_prices(self, client, engine):
+        fill_all(engine, price="2750.00")
+        form = dict(CONTROL_FORM)
+        for hub in HUBS:
+            form[f"{hub.key}_rate"] = "500"
+            for suffix in ("raw_sell", "raw_buy", "compressed_sell", "compressed_buy"):
+                form[f"{hub.key}_{suffix}"] = "2750"
+        html = client.post("/calculate", data=form).get_data(as_text=True)
+        assert "ISK/юнит" in html
+
+    def test_depth_travels_to_the_form(self, client, engine):
+        """Предупреждение о глубине обязано работать и поверх данных из базы:
+        глубина едет скрытым полем ровно как раньше."""
+        add_snapshot(engine, "jita", GasForm.COMPRESSED, OrderSide.SELL, [("2750.00", 100, 1)])
+        html = client.get("/").get_data(as_text=True)
+        assert cell_value(html, "jita_compressed_sell_depth") == "100"
+
+
+class TestHealthz:
+    """Проверка состояния для мониторинга и после развёртывания."""
+
+    def test_reports_profile_and_database(self, client):
+        payload = client.get("/healthz").get_json()
+        assert payload["profile"] == "dev"
+        assert payload["database"] == "ok"
+
+    def test_no_collection_yet(self, client):
+        response = client.get("/healthz")
+        assert response.status_code == 200
+        assert response.get_json()["last_collection"] is None
+
+    def test_fresh_collection(self, client, engine):
+        with session_scope(engine) as session:
+            session.add(CollectionRun(status="ok", finished_at=utcnow()))
+        response = client.get("/healthz")
+        assert response.status_code == 200
+        assert response.get_json()["prices"] == "ok"
+
+    def test_stale_collection_is_not_ok(self, client, engine):
+        """Мониторинг обязан узнать, что сбор встал, не дожидаясь жалоб."""
+        with session_scope(engine) as session:
+            session.add(
+                CollectionRun(status="ok", finished_at=utcnow() - timedelta(hours=5))
+            )
+        response = client.get("/healthz")
+        assert response.status_code == 503
+        assert response.get_json()["prices"] == "устарели"
+
+    def test_aborted_run_does_not_count(self, client, engine):
+        """Прерванный лимитом цикл — не успешный сбор."""
+        with session_scope(engine) as session:
+            session.add(CollectionRun(status="aborted", finished_at=utcnow()))
+        assert client.get("/healthz").get_json()["last_collection"] is None
+
+    def test_database_down(self, app, client):
+        """Таблиц нет — мониторинг обязан увидеть 503, а не бодрое ok."""
+        Base.metadata.drop_all(app.extensions["db_engine"])
+        response = client.get("/healthz")
+        assert response.status_code == 503
+        assert "недоступна" in response.get_json()["database"]

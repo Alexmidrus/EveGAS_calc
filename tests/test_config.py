@@ -164,12 +164,26 @@ class TestApplicationFactory:
     """create_app поднимается в обоих профилях."""
 
     def test_dev(self, tmp_path):
+        from app.db import Base
+
         app = create_app(build_config({}, tmp_path))
+        Base.metadata.create_all(app.extensions["db_engine"])
         assert app.config["APP_ENV"] == DEV
         assert app.test_client().get("/").status_code == 200
 
+    def test_dev_survives_missing_schema(self, tmp_path):
+        """База есть, а таблиц в ней нет — страница обязана открыться:
+        расчёт по ручным ценам от базы не зависит."""
+        app = create_app(build_config({}, tmp_path))
+        response = app.test_client().get("/")
+        assert response.status_code == 200
+        assert "База недоступна" in response.get_data(as_text=True)
+
     def test_prod(self, tmp_path):
+        """Приложение собирается с боевым профилем. Запрос сюда не делаем:
+        DATABASE_URL указывает на Postgres, которого на машине разработки нет,
+        и попытка соединения превратила бы тест в минуту ожидания."""
         app = create_app(build_config(PROD_ENV, tmp_path))
         assert app.config["APP_ENV"] == PROD
         assert app.config["DEBUG"] is False
-        assert app.test_client().get("/").status_code == 200
+        assert app.extensions["db_engine"].url.get_backend_name() == "postgresql"

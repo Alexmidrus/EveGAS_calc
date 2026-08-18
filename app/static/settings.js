@@ -89,8 +89,21 @@
     if (!el || !el.hasAttribute || !el.hasAttribute("data-price-cell")) { return; }
     el.classList.remove("fetched");
     el.removeAttribute("title");
+    /* Снимаем пометку «из базы»: с этого момента сервер обязан оставить
+       ячейку в покое и не подставлять сюда пересчитанную цену. */
+    var auto = form.elements[el.name + "_auto"];
+    if (auto) { auto.value = ""; }
     var depth = form.elements[el.name + "_depth"];
     if (depth) { depth.value = ""; }
+  });
+
+  /* Сетку перерисовал сервер под новую потребность — значит и результат надо
+     пересчитать: иначе на экране остались бы цифры, посчитанные по прежним ценам.
+     Событие recalc перечислено в hx-trigger формы. */
+  document.body.addEventListener("htmx:afterSwap", function (event) {
+    if (event.target && event.target.id === "price-grid") {
+      window.htmx.trigger(form, "recalc");
+    }
   });
 
   form.addEventListener("change", function () {

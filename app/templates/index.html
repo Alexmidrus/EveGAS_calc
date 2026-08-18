@@ -19,7 +19,7 @@
      цифру, и чтобы пара input+change от одного чекбокса схлопнулась в один
      запрос: htmx сбрасывает таймер на каждом событии. Кнопка «Посчитать» остаётся. #}
   <form id="calc-form" hx-post="/calculate" hx-target="#results" hx-swap="innerHTML"
-        hx-trigger="submit, input delay:400ms, change delay:400ms" autocomplete="off">
+        hx-trigger="submit, input delay:400ms, change delay:400ms, recalc" autocomplete="off">
 
     {# --- Блок 1. Параметры расчёта (SPEC §3) --- #}
     <fieldset class="params">
@@ -40,7 +40,7 @@
         </label>
 
         <label>Нужно юнитов сырого
-          <input type="number" name="n_units" value="{{ defaults.n_units }}" min="1" step="1" required>
+          <input type="number" name="n_units" id="n-units" value="{{ defaults.n_units }}" min="1" step="1" required>
         </label>
 
         <label>Тип структуры
@@ -79,14 +79,18 @@
     <fieldset class="prices">
       <legend>Цены по хабам</legend>
       <p class="hint">Пустая ячейка — сценарий не участвует. Без ставки доставки хаб выпадает целиком.</p>
-      <p class="hint">Ручной ввод — мастер, ESI — черновик: подтянутые цены показаны приглушённо
-        и перебиваются вводом. Ставки доставки подтяжка не трогает.</p>
-      <button type="button" class="fetch" id="fetch-prices"
-              hx-post="/fetch-prices" hx-include="#calc-form"
-              hx-target="#price-grid" hx-swap="innerHTML"
-              hx-indicator="#fetch-indicator">Подтянуть цены из ESI</button>
-      <span id="fetch-indicator" class="indicator">запрашиваю ESI…</span>
-      <div id="price-grid">
+      <p class="hint">Цены подставлены из базы и показаны приглушённо; ручной ввод их перебивает.
+        Собирает их отдельная задача по расписанию — из браузера в игровое API мы не ходим.
+        Ставки доставки задаёте только вы.</p>
+      {# Сетка пересчитывается под новую потребность: цена средневзвешенная по нужному
+         объёму, а он меняется вместе с газом, количеством, структурой и навыком.
+         На ввод в самих ячейках обработчик не вешается — затирал бы набранное. #}
+      {# hx-target обязателен: форма задаёт #results, а потомки наследуют его —
+         без своего target ответ с сеткой уехал бы в блок результата. #}
+      <div id="price-grid"
+           hx-post="/price-grid" hx-include="#calc-form"
+           hx-target="this" hx-swap="innerHTML"
+           hx-trigger="change from:#gas-select, change from:#n-units, change from:#structure-select, change from:#gde-select">
         {% include "partials/prices.html" %}
       </div>
     </fieldset>

@@ -1,16 +1,13 @@
-"""HTTP-клиент ESI: заголовки, ретраи, пагинация, параллельные запросы.
+"""HTTP-клиент ESI: заголовки, ретраи, пагинация, условные запросы.
 
 Только транспорт. Разбор стакана — в orderbook.py, он про HTTP ничего не знает.
 Все правила — docs/ESI.md §2.
 
-Единственное место в проекте, ради которого подключён async: одна подтяжка —
-до десяти независимых запросов (2 type_id × 5 регионов). Последовательно это
-3–5 секунд, через gather — меньше секунды.
-
-Падение одного региона не должно ронять остальные: gather вызывается с
-return_exceptions=True, а результат каждого запроса приходит отдельным
-объектом OrdersResult с полем error. Молчаливых нулей нет — хаб помечается
-как «данные не получены».
+**Единственный, кто сюда ходит, — сборщик цен по расписанию.** Веб-часть
+приложения этот модуль не импортирует: пользователь не может вызвать обращение
+к ESI ни одним действием. Ради параллельного обхода 270 целей здесь и нужен
+async; результат каждого запроса приходит отдельным OrdersSnapshot с полем
+error, поэтому падение одного хаба не отменяет остальные.
 """
 
 import asyncio
@@ -20,8 +17,6 @@ from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 
 import httpx
-
-from app.services.cache import TTLCache
 
 # Значения по умолчанию. Переопределяются через config.py — см. from_config.
 DEFAULT_BASE_URL = "https://esi.evetech.net"
@@ -38,8 +33,6 @@ RETRY_BACKOFF_BASE = 0.5  # секунды: 0.5, затем 1.0
 # повтор только усугубит, пользователю нужно сказать правду.
 RATE_LIMIT_STATUSES = frozenset({420, 429})
 
-CacheKey = tuple[int, int]  # (region_id, type_id)
-
 
 @dataclass(frozen=True, slots=True)
 class EsiSettings:
@@ -48,7 +41,7 @@ class EsiSettings:
     user_agent: str
     compatibility_date: str
     timeout: float = DEFAULT_TIMEOUT
-    cache_ttl: float = DEFAULT_CACHE_TTL
+    cache_ttl: float = DEFAULT_CACHE_TTL  # для сборщика: не запрашивать чаще
     base_url: str = DEFAULT_BASE_URL
 
     @classmethod
@@ -79,21 +72,6 @@ class EsiSettings:
             "X-Compatibility-Date": self.compatibility_date,
             "Accept": "application/json",
         }
-
-
-@dataclass(frozen=True, slots=True)
-class OrdersResult:
-    """Ответ по одной паре (регион, тип). Либо ордера, либо текст ошибки."""
-
-    region_id: int
-    type_id: int
-    orders: list[dict] | None = None
-    error: str | None = None  # готовый текст для интерфейса, на русском
-    from_cache: bool = False
-
-    @property
-    def ok(self) -> bool:
-        return self.orders is not None
 
 
 class EsiError(Exception):
@@ -143,29 +121,6 @@ def rate_limit_remaining(response: httpx.Response) -> int | None:
         return int(raw) if raw is not None else None
     except (TypeError, ValueError):
         return None
-
-
-def _cache_ttl_from_headers(response: httpx.Response, default: float) -> float:
-    """TTL из заголовка expires; при его отсутствии или мусоре — значение по умолчанию.
-
-    Свой кэш держим не агрессивнее серверного: сколько ESI просит хранить,
-    столько и храним.
-    """
-    raw = response.headers.get("expires")
-    if not raw:
-        return default
-    try:
-        expires = parsedate_to_datetime(raw)
-    except (TypeError, ValueError):
-        return default
-    date_header = response.headers.get("date")
-    try:
-        now = parsedate_to_datetime(date_header) if date_header else None
-    except (TypeError, ValueError):
-        now = None
-    if now is None:
-        return default
-    return max((expires - now).total_seconds(), 0.0)
 
 
 async def _request_page(
@@ -219,47 +174,6 @@ async def _request_page(
         return response
 
     raise EsiError(f"ESI недоступен ({last_status})")  # недостижимо, но без «а вдруг»
-
-
-async def fetch_orders(
-    client: httpx.AsyncClient,
-    settings: EsiSettings,
-    region_id: int,
-    type_id: int,
-    *,
-    cache: TTLCache[CacheKey, list[dict]] | None = None,
-    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
-) -> OrdersResult:
-    """Все ордера по паре (регион, тип), со всеми страницами и кэшем.
-
-    Пагинация — по заголовку X-Pages. С фильтром по одному type_id страница
-    почти всегда одна, но молча брать только первую нельзя.
-    """
-    key: CacheKey = (region_id, type_id)
-    if cache is not None:
-        cached = cache.get(key)
-        if cached is not None:
-            return OrdersResult(region_id, type_id, orders=cached, from_cache=True)
-
-    try:
-        first = await _request_page(client, settings, region_id, type_id, 1, sleep=sleep)
-        orders: list[dict] = list(first.json())
-
-        try:
-            pages = int(first.headers.get("x-pages", 1))
-        except (TypeError, ValueError):
-            pages = 1
-        for page in range(2, pages + 1):
-            extra = await _request_page(client, settings, region_id, type_id, page, sleep=sleep)
-            orders.extend(extra.json())
-    except EsiError as exc:
-        return OrdersResult(region_id, type_id, error=str(exc))
-    except ValueError as exc:  # тело не разобралось как JSON
-        return OrdersResult(region_id, type_id, error=f"ESI вернул нечитаемый ответ: {exc}")
-
-    if cache is not None:
-        cache.set(key, orders, _cache_ttl_from_headers(first, settings.cache_ttl))
-    return OrdersResult(region_id, type_id, orders=orders)
 
 
 @dataclass(frozen=True, slots=True)
@@ -367,44 +281,3 @@ async def fetch_orders_conditional(
         requests_made=made,
         **limits,
     )
-
-
-async def fetch_many(
-    pairs: Sequence[CacheKey],
-    settings: EsiSettings,
-    *,
-    cache: TTLCache[CacheKey, list[dict]] | None = None,
-    client: httpx.AsyncClient | None = None,
-    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
-) -> dict[CacheKey, OrdersResult]:
-    """Параллельно тянет все пары (регион, тип).
-
-    Падение одного запроса не должно ронять остальные девять: gather вызывается
-    с return_exceptions=True, а неожиданное исключение превращается в OrdersResult
-    с ошибкой — интерфейс покажет по этому хабу «данные не получены».
-    """
-    own_client = client is None
-    http = client or httpx.AsyncClient(timeout=settings.timeout)
-    try:
-        results = await asyncio.gather(
-            *(
-                fetch_orders(http, settings, region_id, type_id, cache=cache, sleep=sleep)
-                for region_id, type_id in pairs
-            ),
-            return_exceptions=True,
-        )
-    finally:
-        if own_client:
-            await http.aclose()
-
-    out: dict[CacheKey, OrdersResult] = {}
-    for pair, result in zip(pairs, results, strict=True):
-        if isinstance(result, OrdersResult):
-            out[pair] = result
-        else:
-            out[pair] = OrdersResult(
-                region_id=pair[0],
-                type_id=pair[1],
-                error=f"Внутренняя ошибка запроса: {result}",
-            )
-    return out

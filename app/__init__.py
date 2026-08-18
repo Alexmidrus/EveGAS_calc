@@ -32,15 +32,6 @@ def create_app(config: Mapping[str, Any] | None = None) -> Flask:
 
     db.init_app(app)
 
-    # Кэш ответов ESI — обычный dict в памяти процесса, один на приложение.
-    # Умирает вместе с процессом; постоянное хранилище цен появится на этапе 7.
-    from app.services.cache import TTLCache
-    from app.services.esi import DEFAULT_CACHE_TTL
-
-    app.extensions["gascalc_esi_cache"] = TTLCache(
-        default_ttl=float(app.config.get("ESI_CACHE_TTL", DEFAULT_CACHE_TTL))
-    )
-
     from app.routes import bp
 
     app.register_blueprint(bp)

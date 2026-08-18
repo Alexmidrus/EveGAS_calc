@@ -1,9 +1,15 @@
-"""HTTP-эндпоинты, разбор формы расчёта и подтяжка цен из ESI."""
+"""HTTP-эндпоинты, разбор формы расчёта и чтение собранных цен.
+
+К ESI отсюда не ходят: цены приезжают из базы, куда их складывает сборщик
+по расписанию (app/jobs/collect.py). Пользователь не может инициировать
+обращение к внешнему API ни одним действием — это жёсткое правило проекта.
+"""
 
 import json
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import timedelta
 
 from flask import Blueprint, current_app, render_template, request
 
@@ -23,7 +29,8 @@ from app.core.models import (
     WarningCode,
 )
 from app.formatting import fmt_number
-from app.services import esi, orderbook
+from app.db import utcnow
+from app.services import prices
 
 bp = Blueprint("main", __name__)
 
@@ -165,13 +172,14 @@ def _volume_label(gas) -> str:
 class PriceCell:
     """Одна ценовая ячейка сетки.
 
-    fetched — цена пришла из ESI и показывается приглушённо; при ручной правке
-    JS снимает пометку и стирает depth, потому что глубина относится к цене,
-    которой больше нет.
+    auto — значение подставлено из базы и показывается приглушённо. При ручной
+    правке JS снимает пометку и стирает depth: глубина относилась к той цене,
+    которой больше нет. Пометка ездит скрытым полем, чтобы сервер знал, какие
+    ячейки можно пересчитать под новый объём, а какие трогать нельзя.
     """
 
     value: str = ""
-    fetched: bool = False
+    auto: bool = False
     depth: int | None = None
 
 
@@ -184,40 +192,161 @@ class HubRow:
     cells: dict[str, PriceCell] = field(default_factory=dict)
 
 
-def _empty_grid() -> list[HubRow]:
-    """Пустая сетка для первой отрисовки страницы."""
-    return [
-        HubRow(hub=hub, cells={suffix: PriceCell() for suffix, _ in PRICE_COLUMNS})
-        for hub in catalog.hubs()
-    ]
+def _needed_by_form(gas: Gas, n_units: int, structure: StructureType, gde_level: int) -> dict[GasForm, int]:
+    """Сколько юнитов каждой формы нужно купить. Под этот объём и считается цена."""
+    eta = calculator.decompression_efficiency(structure, gde_level)
+    return {
+        GasForm.RAW: n_units,
+        GasForm.COMPRESSED: calculator.required_compressed_qty(n_units, eta),
+    }
 
 
-def _grid_from_form(form: Mapping[str, str]) -> list[HubRow]:
-    """Сетка из того, что уже введено в форме.
+def _known_type_ids(gas: Gas) -> dict[GasForm, int]:
+    """ID форм газа, которые известны. Неизвестный ID не выдумывается."""
+    pairs = ((GasForm.RAW, gas.raw_type_id), (GasForm.COMPRESSED, gas.compressed_type_id))
+    return {form: int(type_id) for form, type_id in pairs if type_id is not None}
 
-    Подтяжка перерисовывает сетку целиком, поэтому введённое руками надо
-    вернуть на место: ставки доставки ESI не знает вовсе, а цены, по которым
-    данные не пришли, обязаны остаться как были.
+
+def _load_book(gas: Gas, needed: Mapping[GasForm, int]) -> prices.PriceBook:
+    """Цены из базы по выбранному газу под конкретный объём."""
+    return prices.load_price_book(
+        current_app.extensions["db_engine"],
+        catalog.hubs(),
+        _known_type_ids(gas),
+        needed,
+    )
+
+
+def _grid_notes(gas: Gas, book: prices.PriceBook) -> list[str]:
+    """Что сказать пользователю про происхождение и свежесть цен.
+
+    Молчать нельзя ни про один из случаев: пустая база, устаревшие данные
+    и хаб без среза выглядят на экране одинаково — пустой ячейкой.
     """
-    return [
-        HubRow(
-            hub=hub,
-            rate=form.get(f"{hub.key}_rate", "").strip(),
-            cells={
-                suffix: PriceCell(value=form.get(f"{hub.key}_{suffix}", "").strip())
-                for suffix, _ in PRICE_COLUMNS
-            },
-        )
-        for hub in catalog.hubs()
+    notes: list[str] = []
+    missing_forms = [
+        FORM_LABELS[form]
+        for form in (GasForm.RAW, GasForm.COMPRESSED)
+        if form not in _known_type_ids(gas)
     ]
+    if missing_forms:
+        notes.append(
+            f"{gas.name}: в data/gases.json не заполнен type_id "
+            f"({', '.join(missing_forms)}) — эти колонки заполняются только вручную."
+        )
+
+    if book.error is not None:
+        notes.append(
+            f"База недоступна ({book.error}). Расчёт по ценам, введённым вручную, "
+            f"работает как обычно."
+        )
+        return notes
+
+    if book.empty:
+        notes.append(
+            "Цены ещё не собраны. Сбор идёт по расписанию отдельной задачей "
+            "(python -m app.jobs.collect); до первого запуска сетку можно "
+            "заполнить руками."
+        )
+        return notes
+
+    age = book.age()
+    if age is not None:
+        notes.append(f"Цены из базы, собраны {_humanize_age(age)} назад.")
+        max_age = timedelta(minutes=int(current_app.config["PRICE_MAX_AGE_MINUTES"]))
+        if book.is_stale(max_age):
+            notes.append(
+                f"Данные устарели: старше {_humanize_age(max_age)}. "
+                f"Похоже, сбор цен не отработал — проверьте задачу в cron."
+            )
+
+    if book.missing_hubs:
+        names = {hub.key: hub.name for hub in catalog.hubs()}
+        notes.append(
+            "Данных нет по хабам: "
+            + ", ".join(names.get(key, key) for key in book.missing_hubs)
+            + ". Эти строки не участвуют в расчёте — ноль вместо цены был бы враньём."
+        )
+    return notes
+
+
+def _humanize_age(age: timedelta) -> str:
+    """«12 мин», «1 ч 30 мин», «2 сут» — без секунд и дробей.
+
+    Остаток минут не отбрасывается: порог в 90 минут, показанный как «1 ч»,
+    выглядит опечаткой и заставляет лезть в конфиг.
+    """
+    minutes = int(age.total_seconds() // 60)
+    if minutes < 1:
+        return "меньше минуты"
+    if minutes < 60:
+        return f"{minutes} мин"
+    hours, rest = divmod(minutes, 60)
+    if hours < 24:
+        return f"{hours} ч {rest} мин" if rest else f"{hours} ч"
+    days, rest_hours = divmod(hours, 24)
+    return f"{days} сут {rest_hours} ч" if rest_hours else f"{days} сут"
+
+
+def _build_grid(
+    form: Mapping[str, str], book: prices.PriceBook
+) -> list[HubRow]:
+    """Сетка цен: значения из базы, поверх них — ручной ввод.
+
+    Ручной ввод всегда главнее. Ячейка считается ручной, пока в форме нет
+    пометки auto: её ставит сервер при подстановке из базы и снимает JS,
+    как только пользователь начал печатать.
+    """
+    rows: list[HubRow] = []
+    for hub in catalog.hubs():
+        cells: dict[str, PriceCell] = {}
+        for suffix, _label in PRICE_COLUMNS:
+            field_name = f"{hub.key}_{suffix}"
+            typed = form.get(field_name, "").strip()
+            was_auto = form.get(f"{field_name}_auto") == "1"
+            if typed and not was_auto:
+                cells[suffix] = PriceCell(value=typed, auto=False, depth=None)
+                continue
+
+            gas_form_value, side_value = suffix.rsplit("_", 1)
+            stored = book.get(hub.key, GasForm(gas_form_value), OrderSide(side_value))
+            if stored is not None and stored.price is not None:
+                cells[suffix] = PriceCell(
+                    value=fmt_number(round(stored.price, 2)),
+                    auto=True,
+                    depth=stored.quote.available,
+                )
+            else:
+                cells[suffix] = PriceCell()
+        rows.append(HubRow(hub=hub, rate=form.get(f"{hub.key}_rate", "").strip(), cells=cells))
+    return rows
+
+
+def _render_grid(grid: list[HubRow], notes: list[str]) -> str:
+    """Фрагмент сетки — ответ на GET /price-grid."""
+    return render_template(
+        "partials/prices.html",
+        grid=grid,
+        price_columns=PRICE_COLUMNS,
+        grid_notes=notes or None,
+    )
 
 
 @bp.get("/")
 def index() -> str:
-    """Страница с формой: параметры расчёта и сетка цен."""
+    """Страница с формой: параметры расчёта и сетка цен из базы."""
     gases_by_family: dict[str, list] = {}
     for gas in catalog.gases():
         gases_by_family.setdefault(gas.family, []).append(gas)
+
+    gas = catalog.gas_by_key(DEFAULTS["gas"])
+    needed = _needed_by_form(
+        gas,
+        int(DEFAULTS["n_units"]),
+        StructureType(DEFAULTS["structure"]),
+        int(DEFAULTS["gde_level"]),
+    )
+    book = _load_book(gas, needed)
 
     return render_template(
         "index.html",
@@ -227,13 +356,68 @@ def index() -> str:
         gde_levels=range(GDE_MIN_LEVEL, GDE_MAX_LEVEL + 1),
         hubs=catalog.hubs(),
         price_columns=PRICE_COLUMNS,
-        grid=_empty_grid(),
-        fetch_notes=None,
+        grid=_build_grid({}, book),
+        grid_notes=_grid_notes(gas, book) or None,
         defaults=DEFAULTS,
         volume_labels={gas.key: _volume_label(gas) for gas in catalog.gases()},
         eta_map_json=json.dumps(_eta_percent_map()),
         initial_eta_pct=_eta_percent_map()[DEFAULTS["structure"]][DEFAULTS["gde_level"]],
     )
+
+
+@bp.post("/price-grid")
+def price_grid() -> str:
+    """Перерисовка сетки под новый газ или объём (HTMX).
+
+    Вешается только на поля, влияющие на потребность: газ, количество,
+    структура, навык. На ввод в самих ячейках не вешается намеренно —
+    иначе ответ затирал бы то, что пользователь печатает прямо сейчас.
+    """
+    form = request.form
+    errors: list[str] = []
+    gas = _parse_gas(form, errors)
+    n_units = _parse_n_units(form, errors)
+    structure = _parse_structure(form, errors)
+    gde_level = _parse_gde_level(form, errors)
+
+    if errors or gas is None or structure is None:
+        # Форму чинит пользователь, а сетку в этот момент трогать нельзя:
+        # возвращаем то, что уже введено, и молчим про цены
+        return _render_grid(_build_grid(form, prices.PriceBook(quotes={})), [])
+
+    needed = _needed_by_form(gas, n_units, structure, gde_level)
+    book = _load_book(gas, needed)
+    return _render_grid(_build_grid(form, book), _grid_notes(gas, book))
+
+
+@bp.get("/healthz")
+def healthz() -> tuple[dict, int]:
+    """Состояние приложения для мониторинга и для проверки после развёртывания."""
+    engine = current_app.extensions["db_engine"]
+    payload: dict[str, object] = {"profile": current_app.config["APP_ENV"]}
+    status = 200
+
+    try:
+        last_run = prices.last_successful_run(engine)
+        payload["database"] = "ok"
+    except Exception as exc:  # noqa: BLE001 — здесь важен факт недоступности, а не тип
+        payload["database"] = f"недоступна: {exc}"
+        return payload, 503
+
+    payload["last_collection"] = last_run.isoformat() if last_run else None
+    if last_run is None:
+        payload["prices"] = "сбор ещё ни разу не отработал"
+        return payload, status
+
+    age = utcnow() - last_run
+    payload["collection_age_minutes"] = int(age.total_seconds() // 60)
+    max_age = timedelta(minutes=int(current_app.config["PRICE_MAX_AGE_MINUTES"]))
+    if age > max_age:
+        payload["prices"] = "устарели"
+        status = 503
+    else:
+        payload["prices"] = "ok"
+    return payload, status
 
 
 def _parse_form(form) -> tuple[CalcInput | None, dict[str, HubPrices], list[str]]:
@@ -403,121 +587,3 @@ def api_gases() -> dict:
             for hub in catalog.hubs()
         ],
     }
-
-
-# --- Подтяжка цен из ESI (SPEC §4, docs/ESI.md) ---
-
-
-def _render_grid(grid: list[HubRow], notes: list[str] | None) -> str:
-    """Отдаёт фрагмент сетки цен — ответ на POST /fetch-prices."""
-    return render_template(
-        "partials/prices.html",
-        grid=grid,
-        price_columns=PRICE_COLUMNS,
-        fetch_notes=notes or None,
-    )
-
-
-def _price_cache() -> esi.TTLCache:
-    """Кэш ответов ESI, общий на процесс. Заводится в create_app."""
-    return current_app.extensions["gascalc_esi_cache"]
-
-
-@bp.post("/fetch-prices")
-async def fetch_prices() -> str:
-    """Тянет цены из ESI и возвращает перерисованную сетку (HTMX).
-
-    Async здесь ради одного: до десяти независимых запросов уходят разом.
-    Подтяжка — вспомогательная функция: что бы ни случилось, форма возвращается
-    целой, с сохранённым ручным вводом и внятным объяснением под сеткой.
-    """
-    form = request.form
-    grid = _grid_from_form(form)
-
-    errors: list[str] = []
-    gas = _parse_gas(form, errors)
-    n_units = _parse_n_units(form, errors)
-    structure = _parse_structure(form, errors)
-    gde_level = _parse_gde_level(form, errors)
-    if errors or gas is None or structure is None:
-        return _render_grid(grid, [f"Цены не подтянуты. {e}" for e in errors])
-
-    try:
-        settings = esi.EsiSettings.from_config(current_app.config)
-    except ValueError as exc:
-        return _render_grid(grid, [f"Цены не подтянуты: {exc}."])
-
-    eta = calculator.decompression_efficiency(structure, gde_level)
-    needed = {
-        GasForm.RAW: n_units,
-        GasForm.COMPRESSED: calculator.required_compressed_qty(n_units, eta),
-    }
-
-    notes: list[str] = []
-    known_types: dict[GasForm, int] = {}
-    for gas_form, type_id in (
-        (GasForm.RAW, gas.raw_type_id),
-        (GasForm.COMPRESSED, gas.compressed_type_id),
-    ):
-        if type_id is None:
-            # Выдумывать ID запрещено, поэтому колонки просто не заполняются —
-            # и об этом надо сказать прямо, а не оставить пустоту без объяснения.
-            notes.append(
-                f"{gas.name}, {FORM_LABELS[gas_form]}: type_id не заполнен "
-                f"в data/gases.json — эти две колонки подтянуть неоткуда, "
-                f"заполните вручную."
-            )
-        else:
-            known_types[gas_form] = type_id
-
-    if not known_types:
-        return _render_grid(grid, notes)
-
-    pairs = [
-        (hub.region_id, type_id)
-        for hub in catalog.hubs()
-        for type_id in known_types.values()
-    ]
-    results = await esi.fetch_many(pairs, settings, cache=_price_cache())
-
-    empty_books: list[str] = []
-    filled = 0
-    rows: list[HubRow] = []
-    for row in grid:
-        cells = dict(row.cells)
-        for gas_form, type_id in known_types.items():
-            answer = results[(row.hub.region_id, type_id)]
-            if not answer.ok:
-                notes.append(
-                    f"{row.hub.name}, {FORM_LABELS[gas_form]}: данные не получены — "
-                    f"{answer.error}. Введённое вручную сохранено."
-                )
-                continue
-            for side in OrderSide:
-                assert answer.orders is not None  # проверено выше через answer.ok
-                book = orderbook.quote(answer.orders, row.hub, side, needed[gas_form])
-                suffix = f"{gas_form.value}_{side.value}"
-                if book.price is None:
-                    empty_books.append(
-                        f"{row.hub.name} ({FORM_LABELS[gas_form]} {SIDE_LABELS[side]})"
-                    )
-                    continue
-                cells[suffix] = PriceCell(
-                    value=fmt_number(round(book.price, 2)),
-                    fetched=True,
-                    depth=book.available,
-                )
-                filled += 1
-        rows.append(HubRow(hub=row.hub, rate=row.rate, cells=cells))
-
-    if empty_books:
-        notes.append("Подходящих ордеров в стакане нет: " + ", ".join(empty_books) + ".")
-    if filled:
-        notes.insert(
-            0,
-            f"Подтянуто цен: {filled}. Это средневзвешенная цена на нужный объём "
-            f"({fmt_number(needed[GasForm.RAW])} юнитов сырого или "
-            f"{fmt_number(needed[GasForm.COMPRESSED])} сжатого), а не лучшая цена в стакане.",
-        )
-
-    return _render_grid(rows, notes)
