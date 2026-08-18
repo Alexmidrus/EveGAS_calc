@@ -7,7 +7,7 @@
 
 import json
 import math
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import timedelta
 
@@ -218,6 +218,46 @@ def _load_book(gas: Gas, needed: Mapping[GasForm, int]) -> prices.PriceBook:
     )
 
 
+def _history_row_key(hub_key: str, form: GasForm, side: OrderSide) -> str:
+    """Ключ строки таблицы результата. Строкой — по ней ищет шаблон."""
+    return f"{hub_key}|{form.value}|{side.value}"
+
+
+def _history_rows(gas: Gas, scenarios: Sequence[object]) -> dict[str, dict[str, object]]:
+    """Числа и пометки по истории для каждой строки результата (ESI §5.5).
+
+    Пометки ничего не пересчитывают: ручной ввод остаётся мастером, решение
+    принимает человек. Наше дело — чтобы он видел, торгуют по этой цене или нет
+    и получится ли по ней набрать нужный объём.
+    """
+    stats_by_pair = prices.load_history_stats(
+        current_app.extensions["db_engine"], catalog.hubs(), _known_type_ids(gas)
+    )
+    rows: dict[str, dict[str, object]] = {}
+    for scenario in scenarios:
+        stats = stats_by_pair.get((scenario.hub_key, scenario.form))
+        if stats is None or not stats.usable:
+            continue
+        rows[_history_row_key(scenario.hub_key, scenario.form, scenario.side)] = {
+            "reference": stats.reference,
+            "lowest": stats.lowest,
+            "highest": stats.highest,
+            "daily_volume": stats.daily_volume,
+            "window_volume": stats.volume,
+            "window_days": stats.window_days,
+            "last_day": stats.last_day,
+            # Потребность именно этой строки против оборота именно этой формы:
+            # у сжатого и сырого обороты разные (ESI §5.5)
+            # Заимствованный свод показывается с оговоркой, а не выдаётся
+            # за свой: оборота этого региона мы не знаем (ESI §5.5)
+            "borrowed": stats.borrowed,
+            "unconfirmed": stats.unconfirmed(scenario.price),
+            "short_of_volume": stats.short_of_volume(scenario.qty),
+            "slow_for_volume": stats.slow_for_volume(scenario.qty),
+        }
+    return rows
+
+
 def _grid_notes(gas: Gas, book: prices.PriceBook) -> list[str]:
     """Что сказать пользователю про происхождение и свежесть цен.
 
@@ -261,8 +301,27 @@ def _grid_notes(gas: Gas, book: prices.PriceBook) -> list[str]:
                 f"Похоже, сбор цен не отработал — проверьте задачу в cron."
             )
 
+    names = {hub.key: hub.name for hub in catalog.hubs()}
+    illiquid = sorted(
+        f"{names.get(hub_key, hub_key)} · {FORM_LABELS[form]} {side.value}"
+        for (hub_key, form, side), stored in book.quotes.items()
+        if stored.no_liquid_orders
+    )
+    if illiquid:
+        notes.append(
+            "Ликвидных ордеров нет: "
+            + ", ".join(illiquid)
+            + ". Стакан там есть, но все ордера вне рынка — по таким ценам не торгуют."
+        )
+
+    dropped = sum(stored.dropped for stored in book.quotes.values())
+    if dropped:
+        notes.append(
+            f"Отброшено ордеров вне рынка: {dropped}. Цена считается по тем, "
+            f"по которым реально идут сделки."
+        )
+
     if book.missing_hubs:
-        names = {hub.key: hub.name for hub in catalog.hubs()}
         notes.append(
             "Данных нет по хабам: "
             + ", ".join(names.get(key, key) for key in book.missing_hubs)
@@ -579,6 +638,7 @@ def calculate() -> str:
         # Подстраховка: ядро валидирует жёстче формы. Ошибку показываем, не глотаем.
         return render_template("partials/results.html", errors=[str(exc)])
 
+    history_rows = _history_rows(inp.gas, result.scenarios)
     return render_template(
         "partials/results.html",
         errors=None,
@@ -593,6 +653,16 @@ def calculate() -> str:
         has_shallow=any(
             WarningCode.SHALLOW_BOOK in scenario.warnings
             for scenario in result.scenarios
+        ),
+        history_rows=history_rows,
+        has_borrowed=any(row["borrowed"] for row in history_rows.values()),
+        has_unconfirmed=any(row["unconfirmed"] for row in history_rows.values()),
+        has_volume_warning=any(
+            row["short_of_volume"] or row["slow_for_volume"] for row in history_rows.values()
+        ),
+        history_last_day=max(
+            (row["last_day"] for row in history_rows.values() if row["last_day"]),
+            default=None,
         ),
         warning_codes=WarningCode,
     )

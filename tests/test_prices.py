@@ -162,6 +162,49 @@ class TestHistoryBand:
         assert quote.history.daily_volume == pytest.approx(50_000)
         assert quote.history.short_of_volume(NEEDED[GasForm.RAW]) is False
 
+    def test_borrowed_reference_from_other_hubs(self, engine):
+        """Своей истории нет — опора берётся у соседей.
+
+        Найдено проверкой в браузере 19.08.2026: по сжатому Fullerite-C84
+        в Rens сделок за неделю не было, коридор не применялся, и buy-ордер
+        на 33 ISK при реальной цене около 9000 вышел на первое место таблицы
+        как «лучший вариант». Тестами это не ловилось.
+        """
+        add_snapshot(engine, "rens", GasForm.COMPRESSED, OrderSide.BUY, [("33.02", 50_000, 1)])
+        for hub in ("jita", "amarr", "dodixie"):
+            add_history(engine, hub, GasForm.COMPRESSED, average=9900.0)
+
+        quote = load_price_book(engine, HUBS, TYPE_IDS, NEEDED).get(
+            "rens", GasForm.COMPRESSED, OrderSide.BUY
+        )
+        assert quote.price is None
+        assert quote.no_liquid_orders is True
+        assert quote.history.borrowed is True
+
+    def test_single_neighbour_is_not_enough(self, engine):
+        """Один сосед мог сам оказаться перекошенным — подпирать им нечего."""
+        add_snapshot(engine, "rens", GasForm.COMPRESSED, OrderSide.BUY, [("33.02", 50_000, 1)])
+        add_history(engine, "jita", GasForm.COMPRESSED, average=9900.0)
+
+        quote = load_price_book(engine, HUBS, TYPE_IDS, NEEDED).get(
+            "rens", GasForm.COMPRESSED, OrderSide.BUY
+        )
+        assert quote.history.usable is False
+        assert quote.price == pytest.approx(33.02)  # прежнее правило §4 бессильно
+
+    def test_borrowed_volume_is_not_shown_as_own(self, engine):
+        """Оборот чужого региона за свой не выдаём: в колонке «Продано» прочерк."""
+        add_snapshot(engine, "rens", GasForm.COMPRESSED, OrderSide.BUY, [("9000.00", 50_000, 1)])
+        for hub in ("jita", "amarr", "dodixie"):
+            add_history(engine, hub, GasForm.COMPRESSED, average=9900.0, volume=10)
+
+        stats = load_price_book(engine, HUBS, TYPE_IDS, NEEDED).get(
+            "rens", GasForm.COMPRESSED, OrderSide.BUY
+        ).history
+        assert stats.borrowed is True
+        assert stats.short_of_volume(NEEDED[GasForm.COMPRESSED]) is False
+        assert stats.slow_for_volume(NEEDED[GasForm.COMPRESSED]) is False
+
     def test_high_side_is_generous(self, engine):
         """Сверху коридор широкий: честный sell в 5 опор — не мусор (замер 11.3)."""
         add_snapshot(engine, "hek", GasForm.RAW, OrderSide.SELL, [("15000.00", 10_000, 1)])
@@ -403,6 +446,48 @@ class TestCalculateUsesStoredPrices:
         add_snapshot(engine, "jita", GasForm.COMPRESSED, OrderSide.SELL, [("2750.00", 100, 1)])
         html = client.get("/").get_data(as_text=True)
         assert cell_value(html, "jita_compressed_sell_depth") == "100"
+
+
+class TestHistoryInResults:
+    """История в таблице результата (SPEC §5.2 и §6, этап 11.5)."""
+
+    def form_with_price(self, price: str) -> dict:
+        form = dict(CONTROL_FORM)
+        form["jita_rate"] = "500"
+        form["jita_raw_sell"] = price
+        return form
+
+    def test_columns_show_real_trades(self, client, engine):
+        add_history(engine, "jita", GasForm.RAW, average=3000.0, volume=700_000)
+        html = client.post("/calculate", data=self.form_with_price("3000")).get_data(as_text=True)
+        assert "Сделки" in html and "Продано/сут" in html
+        assert "2 940" in html and "3 060" in html  # диапазон сделок ±2%
+
+    def test_illiquid_price_is_flagged(self, client, engine):
+        """Цена вне диапазона сделок помечается, но не пересчитывается."""
+        add_history(engine, "jita", GasForm.RAW, average=6000.0)
+        html = client.post("/calculate", data=self.form_with_price("1")).get_data(as_text=True)
+        assert "Неликвидная цена" in html
+        assert "сделок по вашей цене не было" in html
+
+    def test_normal_price_is_not_flagged(self, client, engine):
+        """Нормальный спред пометки не даёт — иначе она превратится в шум."""
+        add_history(engine, "jita", GasForm.RAW, average=3000.0)
+        html = client.post("/calculate", data=self.form_with_price("2950")).get_data(as_text=True)
+        assert "Неликвидная цена" not in html
+
+    def test_volume_shortage_is_flagged(self, client, engine):
+        """50 000 нужно, а за неделю в регионе продали 3 500."""
+        add_history(engine, "jita", GasForm.RAW, average=3000.0, days=5, volume=700)
+        html = client.post("/calculate", data=self.form_with_price("3000")).get_data(as_text=True)
+        assert "столько не набрать" in html
+
+    def test_no_history_no_columns_no_crash(self, client, engine):
+        """Без истории таблица работает как раньше: прочерки, ни одной пометки."""
+        html = client.post("/calculate", data=self.form_with_price("3000")).get_data(as_text=True)
+        assert "ISK/юнит" in html
+        assert "Неликвидная цена" not in html
+        assert "столько не набрать" not in html
 
 
 class TestHealthz:

@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from app.core.constants import HISTORY_REFERENCE_DAYS
 from app.core.models import GasForm, Hub, OrderSide
 from app.db import CollectionRun, MarketHistory, MarketSnapshot, load_ladder, session_scope, utcnow
-from app.services.history import HistoryDay, HistoryStats, summarize
+from app.services.history import HistoryDay, HistoryStats, borrow, summarize
 from app.services.orderbook import Quote, quote_from_ladder
 
 
@@ -167,7 +167,44 @@ def _history_stats(
                 volume=int(volume),
             )
         )
-    return {key: summarize(value) for key, value in days.items()}
+    stats = {key: summarize(value) for key, value in days.items()}
+    return _fill_gaps(stats, region_ids, type_ids)
+
+
+def _fill_gaps(
+    stats: Mapping[tuple[int, int], HistoryStats],
+    region_ids: Sequence[int],
+    type_ids: Sequence[int],
+) -> dict[tuple[int, int], HistoryStats]:
+    """Подпирает пары без своей истории соседними регионами (history.borrow).
+
+    Пара без истории — это пара без коридора, а значит книга, в которую мусор
+    проходит как есть. Именно так buy-ордер на 33 ISK по сжатому Fullerite-C84
+    в Rens оказался лучшим вариантом в таблице.
+    """
+    filled = dict(stats)
+    for type_id in type_ids:
+        neighbours = [
+            value
+            for (region, tid), value in stats.items()
+            if tid == type_id and value.usable
+        ]
+        if not neighbours:
+            continue
+        for region_id in region_ids:
+            current = filled.get((region_id, type_id))
+            if current is not None and current.usable:
+                continue
+            spare = borrow(
+                [
+                    value
+                    for (region, tid), value in stats.items()
+                    if tid == type_id and region != region_id
+                ]
+            )
+            if spare.usable:
+                filled[(region_id, type_id)] = spare
+    return filled
 
 
 def load_price_book(
@@ -231,6 +268,38 @@ def load_price_book(
         collected_at=max(times) if times else None,
         oldest_at=min(times) if times else None,
     )
+
+
+def load_history_stats(
+    engine: Engine, hubs: Sequence[Hub], type_ids: Mapping[GasForm, int]
+) -> dict[tuple[str, GasForm], HistoryStats]:
+    """Свод реальных сделок по каждой паре «хаб + форма» — для таблицы результата.
+
+    Отдельный вход нужен потому, что /calculate считает по ценам из формы:
+    человек мог их перебить, и лестницы под ними нет. История при этом наша,
+    а не пользовательская, и подмешивать её через скрытые поля было бы враньём
+    с возможностью подделки.
+
+    Недоступная база здесь не повод для ошибки: расчёт обязан работать и без
+    истории, просто без колонок «Сделки» и «Продано».
+    """
+    if not type_ids or not hubs:
+        return {}
+    by_type = {type_id: form for form, type_id in type_ids.items()}
+    try:
+        with session_scope(engine) as session:
+            stats = _history_stats(
+                session, sorted({hub.region_id for hub in hubs}), list(by_type)
+            )
+    except SQLAlchemyError:
+        return {}
+
+    return {
+        (hub.key, by_type[type_id]): value
+        for (region_id, type_id), value in stats.items()
+        for hub in hubs
+        if hub.region_id == region_id and type_id in by_type
+    }
 
 
 def _short_error(exc: Exception) -> str:

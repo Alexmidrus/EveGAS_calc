@@ -51,6 +51,8 @@
       <th>Хаб</th>
       <th>Что берём</th>
       <th class="num">Цена</th>
+      <th class="num">Сделки</th>
+      <th class="num">Продано/сут</th>
       <th class="num">Купить</th>
       <th class="num">Объём, м³</th>
       <th class="num">Доставка</th>
@@ -61,10 +63,23 @@
   </thead>
   <tbody>
     {% for s in result.scenarios %}
-    <tr class="{{ 'best' if loop.first }}{{ ' warn' if s.warnings }}">
-      <td>{{ hub_names[s.hub_key] }}{% if warning_codes.PRICE_OUTLIER in s.warnings %} *{% endif %}{% if warning_codes.SHALLOW_BOOK in s.warnings %} †{% endif %}</td>
+    {# Свод реальных сделок по этой паре «хаб + форма» (ESI §5.5) #}
+    {% set h = history_rows.get(s.hub_key ~ '|' ~ s.form.value ~ '|' ~ s.side.value) %}
+    <tr class="{{ 'best' if loop.first }}{{ ' warn' if s.warnings or (h and (h.unconfirmed or h.short_of_volume)) }}">
+      <td>{{ hub_names[s.hub_key] }}{% if warning_codes.PRICE_OUTLIER in s.warnings %} *{% endif %}{% if warning_codes.SHALLOW_BOOK in s.warnings %} †{% endif %}{% if h and h.unconfirmed %} ‡{% endif %}{% if h and (h.short_of_volume or h.slow_for_volume) %} §{% endif %}</td>
       <td>{{ form_labels[s.form] }} · {{ s.side.value }}</td>
       <td class="num">{{ s.price|num }}</td>
+      <td class="num">{% if h %}{{ h.reference|num }}
+        <small class="range">{{ h.lowest|num }} … {{ h.highest|num }}</small>
+        {% if h.borrowed %}<small class="range">по другим хабам</small>{% endif %}
+        {% if h.unconfirmed %}<small class="illiquid">сделок по вашей цене не было</small>{% endif %}
+        {% else %}—{% endif %}</td>
+      <td class="num">{% if h and not h.borrowed %}{{ h.daily_volume|compact }}
+        {% if h.short_of_volume %}<small class="illiquid">за неделю продано
+          {{ h.window_volume|compact }} — столько не набрать</small>
+        {% elif h.slow_for_volume %}<small class="shallow">набирать несколько дней</small>
+        {% endif %}
+        {% else %}—{% endif %}</td>
       <td class="num">{{ s.qty|num }}{% if warning_codes.SHALLOW_BOOK in s.warnings %}
         <small class="shallow">в стакане только {{ s.available_qty|num }}</small>{% endif %}</td>
       <td class="num">{{ s.volume_m3|num }}</td>
@@ -96,6 +111,27 @@
   <li>† Глубины стакана не хватает на нужный объём: цена посчитана по тому, что есть,
     остальное придётся добирать дороже или в другом хабе. Глубина известна только
     для цен, подтянутых из ESI.</li>
+  {% endif %}
+  {% if has_unconfirmed %}
+  <li>‡ Неликвидная цена: за неделю сделок по ней не было. Цена не пересчитана —
+    решать вам, но такой ордер, скорее всего, не исполнится.</li>
+  {% endif %}
+  {% if has_volume_warning %}
+  <li>§ Объём: рынок хаба может не отдать нужное количество за раз. «Столько
+    не набрать» — за всю неделю в регионе продали меньше, чем вам нужно;
+    «набирать несколько дней» — больше суточного оборота. Это про проданное,
+    а не про выставленное: глубина стакана считается отдельно (†).</li>
+  {% endif %}
+  {% if has_borrowed %}
+  <li>«По другим хабам» — в этом регионе газом за неделю не торговали вовсе,
+    и цена сверяется со сделками в остальных хабах. Для проверки на мусор этого
+    достаточно: разница между хабами — десятки процентов, а не разы. Оборот
+    в такой строке не показывается: чужой за свой мы не выдаём.</li>
+  {% endif %}
+  {% if history_last_day %}
+  <li>Колонки «Сделки» и «Продано» — реальные сделки в регионе хаба за неделю
+    по {{ history_last_day.strftime('%d.%m.%Y') }} включительно. Сегодняшнего дня
+    в истории ESI не бывает: она обновляется раз в сутки.</li>
   {% endif %}
   {% for hub_key in result.skipped_hubs %}
   <li>{{ hub_names[hub_key] }}: не задана доставка</li>

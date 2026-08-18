@@ -54,6 +54,10 @@ class HistoryStats:
     window_days: int = HISTORY_REFERENCE_DAYS
     last_day: date | None = None
     fresh: bool = False
+    # Опора взята из других регионов, потому что своей не было (см. borrow).
+    # Такой свод годится как коридор, но не годится как показания: оборота
+    # этого региона мы не знаем и выдавать чужой за свой не станем.
+    borrowed: bool = False
 
     @property
     def usable(self) -> bool:
@@ -111,6 +115,11 @@ class HistoryStats:
         Считается от диапазона, а не от опорной цены, и работает для любой
         цены — включая введённую руками, к которой жёсткий фильтр не
         применяется вовсе.
+
+        На заимствованном своде работает тоже: диапазон там настоящий, просто
+        собран по другим хабам, и «по такой цене этот газ нигде не торговали» —
+        утверждение не менее верное. А вот про оборот региона заимствованный
+        свод молчит: см. short_of_volume.
         """
         if not self.usable or self.lowest is None or self.highest is None:
             return False
@@ -120,11 +129,47 @@ class HistoryStats:
 
     def short_of_volume(self, needed: int) -> bool:
         """За всё окно продали меньше, чем нужно человеку: набрать нереально."""
-        return self.usable and needed > self.volume
+        return self.usable and not self.borrowed and needed > self.volume
 
     def slow_for_volume(self, needed: int) -> bool:
         """Объём больше суточного оборота: набирать придётся несколько дней."""
-        return self.usable and not self.short_of_volume(needed) and needed > self.daily_volume
+        return (
+            self.usable
+            and not self.borrowed
+            and not self.short_of_volume(needed)
+            and needed > self.daily_volume
+        )
+
+
+def borrow(others: Sequence[HistoryStats]) -> HistoryStats:
+    """Запасная опора: тот же тип газа, но в других регионах.
+
+    Зачем. По редкой паре «регион + форма» сделок за неделю может не быть вовсе,
+    и тогда коридор не применяется — а именно в таких книгах мусор и живёт.
+    Проверено в браузере 19.08.2026: по сжатому Fullerite-C84 в Rens истории
+    не было, коридор не сработал, и buy-ордер на 33 ISK при реальной цене около
+    9000 вышел на первое место таблицы как «лучший вариант».
+
+    Почему это законно. Один и тот же тип в разных хабах стоит по-разному,
+    но разница измеряется десятками процентов, а коридор шире вчетверо снизу
+    и вдесятеро сверху. Для отсечения мусора точности с запасом; для показаний
+    такой свод не годится и помечается borrowed.
+
+    Меньше двух живых соседей — не опора: один регион мог сам оказаться
+    перекошенным, и подпирать им нечего.
+    """
+    usable = [stats for stats in others if stats.usable and not stats.borrowed]
+    if len(usable) < 2:
+        return HistoryStats()
+    return HistoryStats(
+        reference=median(stats.reference for stats in usable),
+        lowest=min(stats.lowest for stats in usable),
+        highest=max(stats.highest for stats in usable),
+        traded_days=HISTORY_MIN_TRADED_DAYS,
+        last_day=max(stats.last_day for stats in usable if stats.last_day is not None),
+        fresh=True,
+        borrowed=True,
+    )
 
 
 def summarize(

@@ -76,6 +76,10 @@ button.fetch { margin-bottom: 0.5rem; }
 
 .footnote { color: #666; font-size: 0.85em; margin: 0.5rem 0 0; }
 small.shallow { display: block; color: #a05a00; font-weight: 400; }
+/* Диапазон реальных сделок под опорной ценой (ESI §5.5) */
+small.range { display: block; color: #666; font-weight: 400; }
+/* Неликвид: по этой цене сделок не было */
+small.illiquid { display: block; color: #9c1f1f; font-weight: 400; }
 
 .results-table { margin-top: 0.5rem; }
 .results-table .num, td.num, th.num { text-align: right; white-space: nowrap; }
