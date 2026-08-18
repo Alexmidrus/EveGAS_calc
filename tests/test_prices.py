@@ -13,7 +13,15 @@ import pytest
 from app import create_app
 from app.core import catalog
 from app.core.models import GasForm, OrderSide
-from app.db import Base, CollectionRun, MarketSnapshot, dump_ladder, session_scope, utcnow
+from app.db import (
+    Base,
+    CollectionRun,
+    MarketHistory,
+    MarketSnapshot,
+    dump_ladder,
+    session_scope,
+    utcnow,
+)
 from app.services.orderbook import quote_from_ladder
 from app.services.prices import load_price_book
 
@@ -81,6 +89,89 @@ def fill_all(engine, *, age_minutes=0, price="2750.00"):
                     engine, hub.key, form, side,
                     [(price, 1_000_000, 1)], age_minutes=age_minutes,
                 )
+
+
+def add_history(engine, hub_key, form, *, average=3000.0, days=5, volume=100_000, spread=0.02):
+    """История реальных сделок по региону хаба (ESI §5)."""
+    region_id = {h.key: h.region_id for h in HUBS}[hub_key]
+    today = utcnow().date()
+    with session_scope(engine) as session:
+        for i in range(days):
+            session.add(
+                MarketHistory(
+                    region_id=region_id,
+                    type_id=TYPE_IDS[form],
+                    date=today - timedelta(days=i + 1),
+                    average=Decimal(str(round(average, 2))),
+                    highest=Decimal(str(round(average * (1 + spread), 2))),
+                    lowest=Decimal(str(round(average * (1 - spread), 2))),
+                    volume=volume,
+                    order_count=10,
+                )
+            )
+
+
+class TestHistoryBand:
+    """Коридор по истории при чтении из базы (ESI §5.4, этап 11.4)."""
+
+    def test_garbage_book_gives_no_price(self, engine):
+        """Тот самый Rens: единственный buy на 1 ISK при реальной цене 6000.
+
+        Правило «×100 от медианы книги» на книге из одного уровня не работает
+        вовсе — сравнивать не с чем. Внешняя опора закрывает и это.
+        """
+        add_snapshot(engine, "rens", GasForm.RAW, OrderSide.BUY, [("1.00", 85_481, 1)])
+        add_history(engine, "rens", GasForm.RAW, average=6000.0)
+
+        book = load_price_book(engine, HUBS, TYPE_IDS, NEEDED)
+        quote = book.get("rens", GasForm.RAW, OrderSide.BUY)
+        assert quote.price is None
+        assert quote.no_liquid_orders is True
+        assert quote.dropped == 1
+
+    def test_real_order_survives_garbage_majority(self, engine):
+        """Мусора больше половины: медиана книги выбросила бы настоящий ордер."""
+        levels = [("6000.00", 5_000, 1), ("1.00", 1_000, 1), ("1.00", 1_000, 1), ("1.00", 1_000, 1)]
+        add_snapshot(engine, "jita", GasForm.RAW, OrderSide.BUY, levels)
+        add_history(engine, "jita", GasForm.RAW, average=6000.0)
+
+        book = load_price_book(engine, HUBS, TYPE_IDS, NEEDED)
+        quote = book.get("jita", GasForm.RAW, OrderSide.BUY)
+        assert quote.price == pytest.approx(6000.0)
+        assert quote.dropped == 3
+
+    def test_without_history_old_rule_applies(self, engine):
+        """Нет истории — поведение ровно как раньше, и это не ошибка."""
+        levels = [("2750.00", 10_000, 1), ("0.01", 10_000, 1)]
+        add_snapshot(engine, "jita", GasForm.RAW, OrderSide.BUY, levels)
+
+        book = load_price_book(engine, HUBS, TYPE_IDS, NEEDED)
+        quote = book.get("jita", GasForm.RAW, OrderSide.BUY)
+        assert quote.price == pytest.approx(2750.0)  # 0.01 убрало правило §4
+        assert quote.history.usable is False
+
+    def test_history_reaches_the_quote(self, engine):
+        """Свод из той же опоры, по которой считали цену, — для колонок таблицы."""
+        add_snapshot(engine, "jita", GasForm.RAW, OrderSide.SELL, [("3000.00", 10_000, 1)])
+        add_history(engine, "jita", GasForm.RAW, average=3000.0, volume=70_000)
+
+        quote = load_price_book(engine, HUBS, TYPE_IDS, NEEDED).get(
+            "jita", GasForm.RAW, OrderSide.SELL
+        )
+        assert quote.history.reference == pytest.approx(3000.0)
+        assert quote.history.daily_volume == pytest.approx(50_000)
+        assert quote.history.short_of_volume(NEEDED[GasForm.RAW]) is False
+
+    def test_high_side_is_generous(self, engine):
+        """Сверху коридор широкий: честный sell в 5 опор — не мусор (замер 11.3)."""
+        add_snapshot(engine, "hek", GasForm.RAW, OrderSide.SELL, [("15000.00", 10_000, 1)])
+        add_history(engine, "hek", GasForm.RAW, average=3000.0)
+
+        quote = load_price_book(engine, HUBS, TYPE_IDS, NEEDED).get(
+            "hek", GasForm.RAW, OrderSide.SELL
+        )
+        assert quote.price == pytest.approx(15_000.0)
+        assert quote.dropped == 0
 
 
 class TestQuoteFromLadder:

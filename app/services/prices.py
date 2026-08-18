@@ -8,29 +8,54 @@
 на отрисовку страницы.
 """
 
+from collections import defaultdict
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from sqlalchemy import Engine, func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.core.constants import HISTORY_REFERENCE_DAYS
 from app.core.models import GasForm, Hub, OrderSide
-from app.db import CollectionRun, MarketSnapshot, load_ladder, session_scope, utcnow
+from app.db import CollectionRun, MarketHistory, MarketSnapshot, load_ladder, session_scope, utcnow
+from app.services.history import HistoryDay, HistoryStats, summarize
 from app.services.orderbook import Quote, quote_from_ladder
 
 
 @dataclass(frozen=True, slots=True)
 class StoredQuote:
-    """Цена одной ячейки сетки, посчитанная из сохранённой лестницы."""
+    """Цена одной ячейки сетки, посчитанная из сохранённой лестницы.
+
+    history — свод реальных сделок по этой паре «хаб + форма». Он же служил
+    опорой при отсечении мусора, он же показывается пользователю в колонках
+    «Сделки» и «Продано» (ESI §5.5). Считать его второй раз для показа было бы
+    честным способом разойтись с тем, по чему считали цену.
+    """
 
     quote: Quote
     collected_at: datetime
+    history: HistoryStats = field(default_factory=HistoryStats)
 
     @property
     def price(self) -> float | None:
         return self.quote.price
+
+    @property
+    def dropped(self) -> int:
+        """Сколько уровней выброшено как не в рынке — это видно пользователю."""
+        return self.quote.dropped
+
+    @property
+    def no_liquid_orders(self) -> bool:
+        """Книга была, но вся оказалась вне рынка.
+
+        Не то же самое, что «данных нет» (срез не собран) и не то же самое,
+        что «стакан пуст» (ордеров не было вовсе). Откатывать фильтр нельзя:
+        откат вернул бы ровно тот мусор, ради которого он и написан (ESI §5.4).
+        """
+        return self.quote.price is None and self.quote.dropped > 0
 
     def age(self, now: datetime | None = None) -> timedelta:
         return (now or utcnow()) - self.collected_at
@@ -101,6 +126,50 @@ def _latest_rows(session: Session, type_ids: Sequence[int]) -> list[MarketSnapsh
     )
 
 
+def _history_stats(
+    session: Session, region_ids: Sequence[int], type_ids: Sequence[int]
+) -> dict[tuple[int, int], HistoryStats]:
+    """Свод реальных сделок по каждой паре «регион + тип».
+
+    Берутся только дни окна, а не все 90 хранимых: опоре нужна неделя, а тащить
+    в память лишнее на каждую отрисовку страницы незачем.
+
+    Ключ регионный, потому что история регионная: разбивки по станциям
+    у эндпоинта нет (ESI §5.2).
+    """
+    if not region_ids or not type_ids:
+        return {}
+    cutoff = utcnow().date() - timedelta(days=HISTORY_REFERENCE_DAYS)
+    rows = session.execute(
+        select(
+            MarketHistory.region_id,
+            MarketHistory.type_id,
+            MarketHistory.date,
+            MarketHistory.average,
+            MarketHistory.highest,
+            MarketHistory.lowest,
+            MarketHistory.volume,
+        ).where(
+            MarketHistory.region_id.in_(region_ids),
+            MarketHistory.type_id.in_(type_ids),
+            MarketHistory.date > cutoff,
+        )
+    ).all()
+
+    days: dict[tuple[int, int], list[HistoryDay]] = defaultdict(list)
+    for region_id, type_id, when, average, highest, lowest, volume in rows:
+        days[(int(region_id), int(type_id))].append(
+            HistoryDay(
+                date=when,
+                average=float(average),
+                highest=float(highest),
+                lowest=float(lowest),
+                volume=int(volume),
+            )
+        )
+    return {key: summarize(value) for key, value in days.items()}
+
+
 def load_price_book(
     engine: Engine,
     hubs: Sequence[Hub],
@@ -117,12 +186,16 @@ def load_price_book(
         return PriceBook(quotes={})
 
     by_type = {type_id: form for form, type_id in type_ids.items()}
+    region_of = {hub.key: hub.region_id for hub in hubs}
     try:
         with session_scope(engine) as session:
             rows = _latest_rows(session, list(by_type))
             payload = [
                 (r.hub_key, int(r.type_id), r.side, r.ladder, r.collected_at) for r in rows
             ]
+            history = _history_stats(
+                session, sorted(set(region_of.values())), list(by_type)
+            )
     except SQLAlchemyError as exc:
         # Расчёт по ручным ценам обязан работать всегда: недоступная база —
         # повод сказать об этом вслух, а не отдать пользователю пятисотку
@@ -141,9 +214,13 @@ def load_price_book(
             # просто никто не продаёт. Ячейка останется пустой.
             seen_hubs.add(hub_key)
             continue
+        # Нет пригодной истории — band вернёт None, и сработает прежнее правило
+        # по медиане книги. Для редкого газа в мелком хабе это норма (ESI §5.4).
+        stats = history.get((region_of.get(hub_key, 0), type_id), HistoryStats())
         quotes[(hub_key, form, side)] = StoredQuote(
-            quote=quote_from_ladder(levels, side, needed[form]),
+            quote=quote_from_ladder(levels, side, needed[form], band=stats.band()),
             collected_at=collected_at,
+            history=stats,
         )
         seen_hubs.add(hub_key)
 

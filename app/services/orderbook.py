@@ -98,6 +98,20 @@ def drop_outliers(orders: list[dict]) -> list[dict]:
     return [o for o in orders if low <= float(o["price"]) <= high]
 
 
+def keep_within_band(
+    levels: Sequence[tuple[Decimal, int, int]],
+    band: tuple[float, float],
+) -> list[tuple[Decimal, int, int]]:
+    """Оставляет уровни внутри коридора реальных сделок (ESI §5.4).
+
+    Коридор приходит снаружи — его считает history.py по истории сделок.
+    Этот модуль про историю ничего не знает и знать не должен: сюда приходят
+    две границы, отсюда уходит книга.
+    """
+    low, high = band
+    return [level for level in levels if low <= float(level[0]) <= high]
+
+
 def drop_outlier_levels(
     levels: Sequence[tuple[Decimal, int, int]],
 ) -> list[tuple[Decimal, int, int]]:
@@ -273,7 +287,11 @@ def quote(orders: list[dict], hub: Hub, side: OrderSide, needed: int) -> Quote:
 
 
 def quote_from_ladder(
-    levels: Sequence[tuple[Decimal, int, int]], side: OrderSide, needed: int
+    levels: Sequence[tuple[Decimal, int, int]],
+    side: OrderSide,
+    needed: int,
+    *,
+    band: tuple[float, float] | None = None,
 ) -> Quote:
     """Разбор сохранённой лестницы под фактический объём (ROADMAP, этапы 8 и 11).
 
@@ -281,9 +299,15 @@ def quote_from_ladder(
     объёма не зависит: отбор по станции и радиусу и сортировку. Здесь
     доделывается всё остальное.
 
-    Порядок важен. Сначала отсечение выбросов, потом min_volume: медиана должна
+    Порядок важен. Сначала отсечение выбросов, потом min_volume: опора должна
     описывать рынок целиком, а min_volume — это про нашу исполнимость, и сужать
-    им книгу до расчёта медианы значит считать опору по огрызку.
+    им книгу до расчёта опоры значит считать её по огрызку.
+
+    Чем именно отсекать, решает вызывающий. Есть коридор по истории сделок —
+    работает он, и правило §4 не применяется вовсе: оставить оба значило бы
+    сохранить главный случай, ради которого всё написано, — медиана мусорной
+    книги выбрасывает настоящий ордер раньше, чем до него дойдёт коридор
+    (ESI §5.4). Нет коридора — работает прежнее правило по медиане книги.
 
     Для buy отсекаются уровни с min_volume больше нужного количества: такой
     ордер физически не исполнить (ESI §4). Для sell min_volume не смотрим —
@@ -295,7 +319,7 @@ def quote_from_ladder(
     if needed <= 0:
         raise ValueError(f"Нужное количество должно быть больше нуля, получено: {needed}")
 
-    clean = drop_outlier_levels(levels)
+    clean = keep_within_band(levels, band) if band else drop_outlier_levels(levels)
     usable = [
         (price, volume)
         for price, volume, min_volume in clean
