@@ -501,10 +501,18 @@ def healthz() -> tuple[dict, int]:
 
     try:
         last_run = prices.last_successful_run(engine)
+        last_history = prices.last_successful_run(engine, kind="history")
         payload["database"] = "ok"
     except Exception as exc:  # noqa: BLE001 — здесь важен факт недоступности, а не тип
         payload["database"] = f"недоступна: {exc}"
         return payload, 503
+
+    # История — вспомогательный сбор: он отсекает мусор, но без него приложение
+    # считает по прежним правилам. Поэтому её возраст показывается, а статус
+    # ответа не роняет: суточный сбор и не обязан быть свежее суток.
+    payload["last_history_collection"] = last_history.isoformat() if last_history else None
+    if last_history is not None:
+        payload["history_age_hours"] = int((utcnow() - last_history).total_seconds() // 3600)
 
     payload["last_collection"] = last_run.isoformat() if last_run else None
     if last_run is None:

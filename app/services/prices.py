@@ -307,11 +307,17 @@ def _short_error(exc: Exception) -> str:
     return str(exc).strip().splitlines()[0][:200]
 
 
-def last_successful_run(engine: Engine) -> datetime | None:
-    """Когда сборщик в последний раз отработал без прерывания. Нужно /healthz."""
+def last_successful_run(engine: Engine, kind: str = "orders") -> datetime | None:
+    """Когда сборщик в последний раз отработал без прерывания. Нужно /healthz.
+
+    Сборщиков два, и ходят они с разной частотой: стакан каждые 30 минут,
+    история сделок раз в сутки. Смешивать их в одно «время последнего сбора»
+    значит показывать зелёный статус, когда встал один из двух.
+    """
     with session_scope(engine) as session:
         return session.scalar(
             select(func.max(CollectionRun.finished_at)).where(
-                CollectionRun.status.in_(("ok", "partial"))
+                CollectionRun.status.in_(("ok", "partial")),
+                CollectionRun.kind == kind,
             )
         )

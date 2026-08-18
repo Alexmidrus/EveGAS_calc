@@ -526,6 +526,27 @@ class TestHealthz:
             session.add(CollectionRun(status="aborted", finished_at=utcnow()))
         assert client.get("/healthz").get_json()["last_collection"] is None
 
+    def test_history_collection_is_separate(self, client, engine):
+        """Сборщики видны раздельно: один встал — это должно быть заметно."""
+        with session_scope(engine) as session:
+            session.add(CollectionRun(status="ok", kind="orders", finished_at=utcnow()))
+            session.add(
+                CollectionRun(
+                    status="ok", kind="history", finished_at=utcnow() - timedelta(hours=30)
+                )
+            )
+        payload = client.get("/healthz").get_json()
+        assert payload["prices"] == "ok"
+        assert payload["history_age_hours"] == 30
+
+    def test_missing_history_does_not_break_healthz(self, client, engine):
+        """История — вспомогательный сбор: без неё статус не красный."""
+        with session_scope(engine) as session:
+            session.add(CollectionRun(status="ok", kind="orders", finished_at=utcnow()))
+        response = client.get("/healthz")
+        assert response.status_code == 200
+        assert response.get_json()["last_history_collection"] is None
+
     def test_database_down(self, app, client):
         """Таблиц нет — мониторинг обязан увидеть 503, а не бодрое ok."""
         Base.metadata.drop_all(app.extensions["db_engine"])
