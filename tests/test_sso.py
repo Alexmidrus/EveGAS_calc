@@ -564,7 +564,7 @@ class TestSessionCookie:
                 "APP_ENV": "prod",
                 "SECRET_KEY": "x" * 32,
                 "DATABASE_URL": "postgresql+psycopg://u:p@localhost/db",
-                "ESI_USER_AGENT": "EveGAS_calc/0.0.1 (+https://example.org; me@example.org)",
+                "ESI_USER_AGENT": "EveGAS_calc/{version} (+https://example.org; me@example.org)",
             },
             tmp_path,
         )

@@ -14,11 +14,14 @@
 """
 
 import os
+import re
 import runpy
 import secrets
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
+
+from app.version import __version__
 
 # Корень репозитория — на уровень выше пакета app/
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -38,6 +41,15 @@ ESI_MIN_CACHE_TTL = 300
 # под рейт-лимит ESI, включённый 24.02.2026 (docs/ESI.md §2).
 _UA_PLACEHOLDERS = ("USER", "you@example.com", "contact@example.com")
 
+# Метка версии в User-Agent. Записанный руками номер устаревает в тот же день,
+# когда версию подняли, и CCP видит враньё о том, какой клиент к ним ходит.
+# Поэтому в строке пишется {version}, а подставляет его приложение.
+VERSION_MARK = "{version}"
+
+# Первый токен User-Agent по RFC 9110 — «Продукт/Версия». Разбираем только его:
+# цифры дальше по строке принадлежат контакту, а не клиенту.
+_UA_PRODUCT = re.compile(r"^[^/\s]+/(\d[\w.\-]*)$")
+
 _TRUE = {"1", "true", "yes", "on"}
 _FALSE = {"0", "false", "no", "off"}
 
@@ -56,7 +68,7 @@ def _defaults(profile: str, base_dir: Path) -> dict[str, Any]:
     common: dict[str, Any] = {
         "APP_ENV": profile,
         "ESI_USER_AGENT": (
-            "EveGAS_calc/0.0.1 (+https://github.com/USER/EveGAS_calc; you@example.com)"
+            f"EveGAS_calc/{VERSION_MARK} (+https://github.com/USER/EveGAS_calc; you@example.com)"
         ),
         # Дата не должна быть «в будущем»: ESI сравнивает её со своим днём
         # по UTC-11 и отвечает 400. Подробности — docs/ESI.md §2.
@@ -194,6 +206,17 @@ def _validate(config: dict[str, Any]) -> list[str]:
     ua = config["ESI_USER_AGENT"] or ""
     ua_is_template = any(mark in ua for mark in _UA_PLACEHOLDERS)
 
+    # Номер версии, записанный в User-Agent руками, отстаёт молча: подняли
+    # версию — а CCP по-прежнему видит прошлую. Это не ошибка запуска,
+    # но сказать об этом обязаны.
+    product = _UA_PRODUCT.match(ua.split(" ", 1)[0])
+    if product and product.group(1) != __version__:
+        warnings.append(
+            f"В ESI_USER_AGENT записана версия {product.group(1)}, "
+            f"а приложение имеет версию {__version__}. Поставь на её место {VERSION_MARK} — "
+            "подставится текущая."
+        )
+
     if profile == DEV:
         if not config.get("SECRET_KEY"):
             # Ключ на один запуск: сессии не переживут перезапуск, и это
@@ -252,6 +275,15 @@ def _validate(config: dict[str, Any]) -> list[str]:
     return warnings
 
 
+
+def _stamp_version(user_agent: object) -> str:
+    """Подставляет текущую версию в User-Agent на месте метки {version}.
+
+    Строка без метки остаётся как есть: чужой User-Agent — это чужой выбор,
+    ломать его нельзя. Но тогда номер в нём живёт своей жизнью и устаревает
+    молча — об этом предупреждает _validate."""
+    return str(user_agent or "").replace(VERSION_MARK, __version__)
+
 def build_config(
     environ: Mapping[str, str] | None = None,
     base_dir: Path | None = None,
@@ -285,6 +317,8 @@ def build_config(
 
     # Профиль задаётся только окружением: config.py не должен его переопределять
     config["APP_ENV"] = profile
+
+    config["ESI_USER_AGENT"] = _stamp_version(config.get("ESI_USER_AGENT"))
 
     warnings.extend(_validate(config))
     config["CONFIG_WARNINGS"] = tuple(warnings)

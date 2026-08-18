@@ -8,13 +8,14 @@ import pytest
 
 from app import create_app
 from app.config import DEV, PROD, ConfigError, build_config
+from app.version import __version__
 
 # Минимально достаточное окружение боевого профиля
 PROD_ENV = {
     "APP_ENV": "prod",
     "SECRET_KEY": "x" * 32,
     "DATABASE_URL": "postgresql+psycopg://user:pass@localhost/evegas",
-    "ESI_USER_AGENT": "EveGAS_calc/0.0.1 (+https://example.org/app; me@example.org)",
+    "ESI_USER_AGENT": "EveGAS_calc/{version} (+https://example.org/app; me@example.org)",
 }
 
 
@@ -75,6 +76,45 @@ class TestDevProfile:
         config = build_config({}, tmp_path)
         assert any("config.py" in w for w in config["CONFIG_WARNINGS"])
 
+
+class TestUserAgentVersion:
+    """Версия в User-Agent берётся из одного места и не пишется руками."""
+
+    def test_mark_is_replaced(self, tmp_path):
+        config = build_config(
+            {"ESI_USER_AGENT": "gascalc/{version} (+https://example.org; me@example.org)"},
+            tmp_path,
+        )
+        assert config["ESI_USER_AGENT"] == (
+            f"gascalc/{__version__} (+https://example.org; me@example.org)"
+        )
+
+    def test_default_carries_current_version(self, tmp_path):
+        config = build_config({}, tmp_path)
+        assert f"EveGAS_calc/{__version__}" in config["ESI_USER_AGENT"]
+
+    def test_foreign_user_agent_is_left_alone(self, tmp_path):
+        """Чужую строку без метки не трогаем: это выбор владельца."""
+        own = "gascalc (+https://example.org; me@example.org)"
+        config = build_config({"ESI_USER_AGENT": own}, tmp_path)
+        assert config["ESI_USER_AGENT"] == own
+        assert not any("версия" in w for w in config["CONFIG_WARNINGS"])
+
+    def test_handwritten_version_warns(self, tmp_path):
+        """Записанный руками номер отстанет молча — об этом надо сказать."""
+        config = build_config(
+            {"ESI_USER_AGENT": "gascalc/0.1 (+https://example.org; me@example.org)"},
+            tmp_path,
+        )
+        assert any("0.1" in w and __version__ in w for w in config["CONFIG_WARNINGS"])
+
+    def test_contact_digits_are_not_a_version(self, tmp_path):
+        """Цифры в контакте — не версия клиента, предупреждать не о чем."""
+        config = build_config(
+            {"ESI_USER_AGENT": "gascalc/{version} (+https://example.org/v2; me2@example.org)"},
+            tmp_path,
+        )
+        assert not any("версия" in w for w in config["CONFIG_WARNINGS"])
 
 class TestProdProfile:
     """Прод: всё, чего не хватает, обязано выясниться при старте."""

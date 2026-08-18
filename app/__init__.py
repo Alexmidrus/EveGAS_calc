@@ -6,8 +6,9 @@ from typing import Any
 from flask import Flask
 
 from app.config import BASE_DIR, build_config
+from app.version import __version__
 
-__all__ = ["BASE_DIR", "create_app"]
+__all__ = ["BASE_DIR", "__version__", "create_app"]
 
 
 def create_app(config: Mapping[str, Any] | None = None) -> Flask:

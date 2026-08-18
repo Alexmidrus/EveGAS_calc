@@ -22,7 +22,11 @@ SECRET_KEY, DATABASE_URL, ESI_CLIENT_ID, ESI_CLIENT_SECRET. Подробност
 # Обязательно подставь свой контакт — этого требует API EVE Online.
 # Безликие User-Agent попадают под рейт-лимит. В профиле prod шаблонное
 # значение считается ошибкой и роняет запуск.
-ESI_USER_AGENT = "EveGAS_calc/0.0.1 (+https://github.com/USER/EveGAS_calc; you@example.com)"
+#
+# Метку {version} подставляет приложение из app/version.py. Записанный сюда
+# руками номер отстанет в тот же день, когда версию поднимут, — на это
+# приложение ругается при старте.
+ESI_USER_AGENT = "EveGAS_calc/{version} (+https://github.com/USER/EveGAS_calc; you@example.com)"
 
 # Дата, на которую написан клиент ESI. Фиксирует поведение API.
 #
