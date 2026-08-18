@@ -172,6 +172,48 @@ class TestSavingRequests:
         with session_scope(engine) as session:
             assert session.scalar(select(func.count()).select_from(MarketSnapshot)) == 2
 
+    def test_not_modified_confirms_freshness(self, engine, targets):
+        """304 — это «твоя копия актуальна», а не «данные протухли».
+
+        Пока время среза оставалось временем первой загрузки, страница
+        показывала «собраны сутки назад» и предупреждала об устаревании
+        на данных, которые ESI только что подтвердил."""
+        run(engine, targets, client_returning(ok_response()))
+        with session_scope(engine) as session:
+            for row in session.scalars(select(MarketSnapshot)):
+                row.collected_at = utcnow() - timedelta(days=1)
+
+        run(engine, targets, client_returning(httpx.Response(304)))
+
+        with session_scope(engine) as session:
+            ages = [
+                utcnow() - row.collected_at
+                for row in session.scalars(select(MarketSnapshot))
+            ]
+        assert ages and all(age < timedelta(minutes=1) for age in ages)
+
+    def test_not_modified_extends_expires(self, engine, targets):
+        """Срок годности из ответа 304 тоже в силе: иначе следующий цикл
+        пойдёт за этим срезом впустую."""
+        run(engine, targets, client_returning(ok_response()))
+        future = (utcnow() + timedelta(minutes=5)).strftime("%a, %d %b %Y %H:%M:%S GMT")
+        run(
+            engine,
+            targets,
+            client_returning(httpx.Response(304, headers={"expires": future})),
+        )
+
+        sent: list[httpx.Request] = []
+        stats = run(engine, targets, client_returning(ok_response(), record=sent))
+        assert sent == []
+        assert stats.skipped_fresh == 1
+
+    def test_not_modified_without_snapshot_is_harmless(self, engine, targets):
+        """Подтверждать нечего — это не повод падать."""
+        stats = run(engine, targets, client_returning(httpx.Response(304)))
+        assert stats.not_modified == 1
+        assert stats.errors == 0
+
 
 class TestFailures:
     """Частичный сбой не должен ни ронять цикл, ни писать нули."""

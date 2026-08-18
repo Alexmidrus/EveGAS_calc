@@ -1,4 +1,4 @@
-/* Минимальное оформление (SPEC §9): системный шрифт, таблицы с рамками,
+/* Минимальное оформление (SPEC §10): системный шрифт, таблицы с рамками,
    две подсветки. Дизайн — отдельная задача после того, как логика заработает. */
 
 :root { color-scheme: only light; } /* цвета в файле светлые; тёмная тема — задача этапа дизайна */
@@ -117,3 +117,16 @@ small.shallow { display: block; color: #a05a00; font-weight: 400; }
   padding: 0.6rem 1rem;
   margin: 1rem 0;
 }
+
+/* --- Шапка с аккаунтом (этап 9) --- */
+.topbar { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; }
+.account { text-align: right; font-size: 0.9rem; }
+.account .who { font-weight: 600; }
+.account small { display: block; color: #666; }
+.account form { display: inline; }
+.flash { list-style: none; padding: 0; margin: 0.5rem 0; }
+.flash li { padding: 0.4rem 0.6rem; border-left: 3px solid #999; margin-bottom: 0.25rem; }
+.flash li.error { border-color: #b00; background: #fff3f3; }
+.flash li.ok { border-color: #2a7; background: #f2fbf6; }
+.import-offer { padding: 0.5rem 0.6rem; margin: 0.5rem 0; border: 1px solid #ccc; }
+.import-offer span { margin-right: 0.5rem; }

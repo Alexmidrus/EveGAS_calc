@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import timedelta
 
-from flask import Blueprint, current_app, render_template, request
+from flask import Blueprint, current_app, render_template, request, session
 
 from app.core import calculator, catalog
 from app.core.constants import GDE_MAX_LEVEL, GDE_MIN_LEVEL
@@ -28,9 +28,10 @@ from app.core.models import (
     StructureType,
     WarningCode,
 )
+from app.auth.views import current_character, settings_or_none
 from app.formatting import fmt_number
 from app.db import utcnow
-from app.services import prices
+from app.services import prices, user_settings
 
 bp = Blueprint("main", __name__)
 
@@ -332,6 +333,29 @@ def _render_grid(grid: list[HubRow], notes: list[str]) -> str:
     )
 
 
+
+def _for_template(saved: Mapping[str, str]) -> dict[str, object]:
+    """Сохранённые настройки в том виде, в каком их ждёт шаблон.
+
+    Хранилище говорит именами полей формы и строками — так их присылает
+    браузер. Шаблон местами говорит иначе: уровень навыка он сравнивает
+    с числом из ``range()``, а брокерский процент берёт из ключа
+    ``broker_pct``. Без перевода «4» == 4 ложно и sell_only не находится:
+    настройка не восстанавливается, и ошибку не видно — поле просто
+    показывает умолчание."""
+    values: dict[str, object] = dict(saved)
+
+    if (level := saved.get("gde_level")) is not None:
+        try:
+            values["gde_level"] = int(level)
+        except ValueError:
+            values.pop("gde_level")  # в базе мусор — пусть будет умолчание
+
+    if (fee := saved.get("broker_fee")) is not None:
+        values["broker_pct"] = fee
+
+    return values
+
 @bp.get("/")
 def index() -> str:
     """Страница с формой: параметры расчёта и сетка цен из базы."""
@@ -339,29 +363,48 @@ def index() -> str:
     for gas in catalog.gases():
         gases_by_family.setdefault(gas.family, []).append(gas)
 
-    gas = catalog.gas_by_key(DEFAULTS["gas"])
+    # Настройки вошедшего перебивают умолчания. У анонима их нет — он живёт
+    # в localStorage, и это по-прежнему основной режим работы.
+    who = current_character()
+    saved = (
+        user_settings.load(current_app.extensions["db_engine"], who[0])
+        if who is not None
+        else user_settings.StoredSettings()
+    )
+    values = dict(DEFAULTS) | _for_template(saved.values)
+
+    try:
+        gas = catalog.gas_by_key(str(values["gas"]))
+        structure = StructureType(str(values["structure"]))
+    except (KeyError, ValueError):
+        # Сохранённое значение устарело: газ переименовали или тип структуры
+        # исчез. Подставляем умолчание, а не роняем страницу.
+        gas = catalog.gas_by_key(DEFAULTS["gas"])
+        structure = StructureType(DEFAULTS["structure"])
+        values = dict(DEFAULTS)
+
     needed = _needed_by_form(
-        gas,
-        int(DEFAULTS["n_units"]),
-        StructureType(DEFAULTS["structure"]),
-        int(DEFAULTS["gde_level"]),
+        gas, int(values["n_units"]), structure, int(values["gde_level"])
     )
     book = _load_book(gas, needed)
 
     return render_template(
         "index.html",
+        character=who,
+        sso_enabled=settings_or_none() is not None,
+        offer_import=session.pop("offer_settings_import", False),
         gases_by_family=gases_by_family,
         family_labels=FAMILY_LABELS,
         structure_labels=STRUCTURE_LABELS,
         gde_levels=range(GDE_MIN_LEVEL, GDE_MAX_LEVEL + 1),
         hubs=catalog.hubs(),
         price_columns=PRICE_COLUMNS,
-        grid=_build_grid({}, book),
+        grid=_build_grid({f"{key}_rate": rate for key, rate in saved.freight_rates.items()}, book),
         grid_notes=_grid_notes(gas, book) or None,
-        defaults=DEFAULTS,
+        defaults=values,
         volume_labels={gas.key: _volume_label(gas) for gas in catalog.gases()},
         eta_map_json=json.dumps(_eta_percent_map()),
-        initial_eta_pct=_eta_percent_map()[DEFAULTS["structure"]][DEFAULTS["gde_level"]],
+        initial_eta_pct=_eta_percent_map()[structure.value][int(values["gde_level"])],
     )
 
 
@@ -557,7 +600,7 @@ def calculate() -> str:
 
 @bp.get("/api/gases")
 def api_gases() -> dict:
-    """JSON-справочник газов для клиентского JS (SPEC §8).
+    """JSON-справочник газов для клиентского JS (SPEC §9).
 
     Отдаёт ровно то, что знает сервер, включая незаполненные raw_type_id:
     null здесь — это честное «неизвестно», а не повод что-то подставить.

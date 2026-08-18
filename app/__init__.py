@@ -18,6 +18,21 @@ def create_app(config: Mapping[str, Any] | None = None) -> Flask:
     """
     app = Flask(__name__)
     app.config.update(build_config() if config is None else config)
+
+    # Защита куки сессии задаётся здесь, а не в конфиге: она не должна зависеть
+    # от того, каким путём конфигурация приехала. Скрипт до куки не дотянется,
+    # на чужой сайт она не уедет, а по http уйдёт только в dev-профиле.
+    #
+    # Именно присваивание, а не setdefault: Flask уже держит все три ключа
+    # со своими значениями, и setdefault оказался бы пустышкой — в проде
+    # это оставило бы куку сессии ходить по открытому http.
+    provided = dict(config or {})
+    if "SESSION_COOKIE_HTTPONLY" not in provided:
+        app.config["SESSION_COOKIE_HTTPONLY"] = True
+    if "SESSION_COOKIE_SAMESITE" not in provided:
+        app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+    if "SESSION_COOKIE_SECURE" not in provided:
+        app.config["SESSION_COOKIE_SECURE"] = app.config.get("APP_ENV") != "dev"
     for warning in app.config.get("CONFIG_WARNINGS", ()):
         app.logger.warning(warning)
 
@@ -32,8 +47,15 @@ def create_app(config: Mapping[str, Any] | None = None) -> Flask:
 
     db.init_app(app)
 
+    # Ключи подписи EVE SSO: один кэш на процесс, а не поход в сеть на каждый вход
+    from app.auth.sso import JwksCache
+
+    app.extensions["sso_jwks"] = JwksCache()
+
+    from app.auth.views import bp as auth_bp
     from app.routes import bp
 
     app.register_blueprint(bp)
+    app.register_blueprint(auth_bp)
 
     return app

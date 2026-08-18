@@ -201,6 +201,38 @@ def _store(
     return written
 
 
+
+def _touch(engine: Engine, target: Target, snapshot: OrdersSnapshot) -> int:
+    """Отмечает, что последний срез подтверждён ответом 304.
+
+    Лестница не изменилась, поэтому переписывать её нечем и незачем —
+    обновляется только время: срез верен на сейчас, а не на момент первой
+    загрузки. Возвращает, сколько строк подтверждено.
+
+    Срока годности из ответа тоже касается: без него следующий цикл считал бы
+    срез просроченным и ходил бы за ним впустую."""
+    now = utcnow()
+    touched = 0
+    with session_scope(engine) as session:
+        for side in (OrderSide.SELL, OrderSide.BUY):
+            row = session.scalars(
+                select(MarketSnapshot)
+                .where(
+                    MarketSnapshot.hub_key == target.hub.key,
+                    MarketSnapshot.type_id == target.type_id,
+                    MarketSnapshot.side == side.value,
+                )
+                .order_by(MarketSnapshot.collected_at.desc())
+                .limit(1)
+            ).first()
+            if row is None:
+                continue  # подтверждать нечего: среза ещё не было
+            row.collected_at = now
+            if snapshot.expires_at is not None:
+                row.expires_at = snapshot.expires_at
+            touched += 1
+    return touched
+
 def prune(engine: Engine, keep: int = KEEP_SNAPSHOTS) -> int:
     """Оставляет последние keep срезов на каждую тройку. Возвращает число удалённых.
 
@@ -310,7 +342,13 @@ async def run_collection(
             break
 
         if result.not_modified:
+            # 304 значит «твоя копия актуальна» — данные подтверждены сейчас,
+            # а не устарели. Не отметить это значит навсегда оставить срез
+            # с датой первой загрузки: на экране «собраны сутки назад»
+            # и предупреждение об устаревании на свежих по сути данных.
             stats.not_modified += 1
+            if not dry_run:
+                _touch(engine, target, result)
             continue
         if not result.ok:
             # Прежний срез остаётся в силе: ноль вместо цены хуже отсутствия цены
@@ -377,7 +415,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return EXIT_ABORTED
 
     log.info(
-        "Итог: запросов %d, записано срезов %d, без изменений %d, "
+        "Итог: запросов %d, записано срезов %d, подтверждено без изменений %d, "
         "пропущено свежих %d, ошибок %d, статус %s",
         stats.requests_made,
         stats.written,

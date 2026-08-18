@@ -6,9 +6,40 @@
   <title>EveGAS_calc — калькулятор закупки газа</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
-<body>
-  <h1>EveGAS_calc</h1>
-  <p class="tagline">Где сегодня выгоднее купить газ: сырой против сжатого, пять хабов, доставка учтена.</p>
+<body{% if character %} data-character="{{ character[0] }}"{% endif %}>
+  <header class="topbar">
+    <div>
+      <h1>EveGAS_calc</h1>
+      <p class="tagline">Где сегодня выгоднее купить газ: сырой против сжатого, пять хабов, доставка учтена.</p>
+    </div>
+    {# Вход нужен только ради хранения настроек. Без него работает всё. #}
+    <div class="account">
+      {% if character %}
+      <span class="who">{{ character[1] }}</span>
+      <form method="post" action="{{ url_for('auth.logout') }}"><button type="submit">Выйти</button></form>
+      {% elif sso_enabled %}
+      <a class="login" href="{{ url_for('auth.login') }}">Войти через EVE SSO</a>
+      <small>только чтобы сохранять настройки</small>
+      {% endif %}
+    </div>
+  </header>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+  {% if messages %}
+  <ul class="flash">
+    {% for category, message in messages %}<li class="{{ category }}">{{ message }}</li>{% endfor %}
+  </ul>
+  {% endif %}
+  {% endwith %}
+
+  {% if offer_import %}
+  {# Первый вход: в браузере могли остаться настройки, накопленные анонимно #}
+  <div class="import-offer" id="import-offer">
+    <span>Перенести настройки из этого браузера в аккаунт?</span>
+    <button type="button" id="import-settings">Перенести</button>
+    <button type="button" id="dismiss-import">Не нужно</button>
+  </div>
+  {% endif %}
 
   {# Автопересчёт (SPEC §2). События слушаются на форме, поэтому переживают
      подмену сетки через HTMX.
@@ -98,7 +129,7 @@
     <div class="actions">
       <button type="submit" class="calculate">Посчитать</button>
       {# Фильтр результата (SPEC §5.4): buy-ордер — заявка, а не покупка #}
-      <label class="filter"><input type="checkbox" name="sell_only" id="sell-only">
+      <label class="filter"><input type="checkbox" name="sell_only" id="sell-only"{% if defaults.sell_only %} checked{% endif %}>
         только sell</label>
     </div>
   </form>

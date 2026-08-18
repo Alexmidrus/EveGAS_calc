@@ -51,9 +51,19 @@ class TestDevProfile:
         assert config["DATABASE_URL"].endswith("var/evegas_dev.sqlite3")
 
     def test_starts_without_secrets(self, tmp_path):
-        """Ни SECRET_KEY, ни DATABASE_URL в dev не обязательны."""
+        """Ни SECRET_KEY, ни DATABASE_URL в dev задавать не нужно.
+
+        Ключ для сессии всё же необходим — иначе не заработает вход, — поэтому
+        в dev он генерируется на один запуск, о чём говорится вслух."""
         config = build_config({}, tmp_path)
-        assert config["SECRET_KEY"] is None
+        assert config["SECRET_KEY"]
+        assert any("SECRET_KEY" in w for w in config["CONFIG_WARNINGS"])
+
+    def test_given_secret_key_is_kept(self, tmp_path):
+        """Заданный ключ не должен подменяться сгенерированным: иначе сессии
+        рассыпались бы при каждом перезапуске и на проде тоже."""
+        config = build_config({"SECRET_KEY": "z" * 40}, tmp_path)
+        assert config["SECRET_KEY"] == "z" * 40
 
     def test_template_user_agent_warns_but_starts(self, tmp_path):
         """Шаблонный UA в dev — предупреждение, а не отказ работать."""

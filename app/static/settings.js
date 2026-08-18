@@ -1,4 +1,4 @@
-/* Логика страницы: настройки в localStorage (SPEC §7) и живые подписи.
+/* Логика страницы: настройки формы (SPEC §7) и живые подписи.
    Игровых чисел в этом файле нет — всё приходит из data-атрибутов сервера. */
 (function () {
   "use strict";
@@ -6,6 +6,10 @@
   var STORAGE_KEY = "gascalc.settings";
   var form = document.getElementById("calc-form");
   if (!form) { return; }
+
+  /* Вошедший хранит настройки на сервере: браузер может быть чужим или
+     смениться. Аноним остаётся в localStorage — это по-прежнему рабочий режим. */
+  var loggedIn = document.body.hasAttribute("data-character");
 
   /* Сохраняем: ставки доставки, структуру, GDE, брокера, процент обеспечения,
      чекбоксы. Цены НЕ сохраняем — устаревают за минуты. */
@@ -77,7 +81,13 @@
   if (resetButton) {
     resetButton.addEventListener("click", function () {
       try { localStorage.removeItem(STORAGE_KEY); } catch (e) {}
-      location.reload();
+      if (!loggedIn) { location.reload(); return; }
+      /* У вошедшего настройки лежат в базе, и очистить один браузер мало:
+         после перезагрузки они вернулись бы с сервера. Пустая форма затирает
+         сохранённое, и страница снова открывается на умолчаниях. */
+      fetch("/settings/save", {method: "POST", body: new URLSearchParams()})
+        .catch(function () { /* не вышло — покажем как есть, а не соврём */ })
+        .then(function () { location.reload(); });
     });
   }
 
@@ -106,15 +116,49 @@
     }
   });
 
+  function saveToServer() {
+    var data = new URLSearchParams();
+    savedFieldNames().forEach(function (name) {
+      var value = getField(name);
+      if (value === true) { data.append(name, "on"); }
+      else if (value !== false && value !== null) { data.append(name, value); }
+    });
+    ["gas", "n_units"].forEach(function (name) {
+      var value = getField(name);
+      if (value !== null) { data.append(name, value); }
+    });
+    fetch("/settings/save", {method: "POST", body: data}).catch(function () {
+      /* сеть моргнула — настройки не потеряны, они на экране */
+    });
+  }
+
   form.addEventListener("change", function () {
     updateEta();
     updateVolumes();
-    saveSettings();
+    if (loggedIn) { saveToServer(); } else { saveSettings(); }
   });
+
+  /* Первый вход: предложить забрать то, что накопилось в браузере анонимно. */
+  var importBox = document.getElementById("import-offer");
+  if (importBox) {
+    var importButton = document.getElementById("import-settings");
+    var dismissButton = document.getElementById("dismiss-import");
+    if (importButton) {
+      importButton.addEventListener("click", function () {
+        restoreSettings();
+        saveToServer();
+        importBox.remove();
+        location.reload();
+      });
+    }
+    if (dismissButton) {
+      dismissButton.addEventListener("click", function () { importBox.remove(); });
+    }
+  }
 
   /* Восстановление — сразу при загрузке: скрипт подключён в конце body,
      выполняется до первой отрисовки, форма не мигает. */
-  restoreSettings();
+  if (!loggedIn) { restoreSettings(); }
   updateEta();
   updateVolumes();
 })();

@@ -39,6 +39,7 @@ def app():
             "APP_ENV": "dev",
             "DATABASE_URL": "sqlite:///:memory:",
             "PRICE_MAX_AGE_MINUTES": 90,
+            "SECRET_KEY": "тестовый ключ, длины хватает с запасом",
             "TESTING": True,
         }
     )

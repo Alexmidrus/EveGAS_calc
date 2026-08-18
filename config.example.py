@@ -46,3 +46,19 @@ DEBUG = True
 # и трогать эту строку не нужно. В prod адрес приходит из переменной
 # окружения DATABASE_URL и указывает на MariaDB, MySQL или Postgres.
 # DATABASE_URL = "sqlite:///var/evegas_dev.sqlite3"
+
+
+# Вход через EVE SSO. Нужен только для того, чтобы хранить настройки расчёта
+# на сервере; без этих ключей приложение работает анонимно и в полном объёме.
+# Приложение заводится на https://developers.eveonline.com/applications,
+# тип Authentication Only — scope не нужны вовсе.
+#
+# Колбэк CCP сверяет посимвольно: он обязан совпасть с тем, что записано
+# в приложении у CCP, включая схему, порт и отсутствие слэша в конце.
+# ESI_CLIENT_ID = "..."
+# ESI_CLIENT_SECRET = "..."
+# SSO_REDIRECT_URI = "http://localhost:5000/sso/callback"
+
+# Ключ подписи куки сессии. В dev без него обойтись можно — сгенерируется
+# временный, но тогда вход не переживёт перезапуск. В prod приходит из окружения.
+# SECRET_KEY = "..."  # python -c "import secrets; print(secrets.token_urlsafe(32))"

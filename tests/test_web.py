@@ -244,7 +244,7 @@ class TestSellOnlyFilter:
 
 
 class TestGasesApi:
-    """GET /api/gases (SPEC §8)."""
+    """GET /api/gases (SPEC §9)."""
 
     def test_returns_all_gases_and_hubs(self, client):
         payload = client.get("/api/gases").get_json()
