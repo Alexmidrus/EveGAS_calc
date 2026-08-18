@@ -162,6 +162,7 @@ async def _request(
     sleep: Callable[[float], Awaitable[None]],
     extra_headers: Mapping[str, str] | None = None,
     what: str = "данных",
+    allow_statuses: frozenset[int] = frozenset(),
 ) -> httpx.Response:
     """Единственный путь к сети: заголовки, ретраи на 5xx, разбор лимитов.
 
@@ -195,6 +196,10 @@ async def _request(
                 f"{MAX_RETRIES + 1} попытки подряд не прошли"
             )
         if response.status_code >= 400:
+            if response.status_code in allow_statuses:
+                # Ответ разберёт вызывающий: бывают 4xx, которые не сбой,
+                # а осмысленный ответ по существу
+                return response
             raise EsiError(f"ESI ответил {response.status_code} на запрос {what}")
         return response
 
@@ -236,6 +241,22 @@ def _expires_at(response: httpx.Response) -> datetime | None:
         return None
 
 
+def _error_text(response: httpx.Response) -> str:
+    """Текст ошибки из тела ответа ESI. Нечитаемое тело не должно ронять разбор."""
+    try:
+        body = response.json()
+    except ValueError:
+        return response.text[:200]
+    if isinstance(body, dict):
+        return str(body.get("error", body))[:200]
+    return str(body)[:200]
+
+
+def _not_tradable(response: httpx.Response) -> bool:
+    """Ответ «Type not tradable on market!» — у типа истории нет и не будет."""
+    return "not tradable" in _error_text(response).lower()
+
+
 @dataclass(frozen=True, slots=True)
 class HistorySnapshot:
     """Ответ на условный запрос истории сделок (ESI §5).
@@ -252,6 +273,9 @@ class HistorySnapshot:
     last_modified: str | None = None
     expires_at: datetime | None = None
     not_modified: bool = False
+    # ESI ответил «Type not tradable on market!»: у типа истории нет и не будет.
+    # Это ответ по существу, а не сбой, — см. not_tradable ниже и ESI §5.2.
+    not_tradable: bool = False
     error: str | None = None
     requests_made: int = 0
     error_limit_remain: int | None = None
@@ -297,6 +321,7 @@ async def fetch_history_conditional(
             sleep=sleep,
             extra_headers=conditional or None,
             what="истории сделок",
+            allow_statuses=frozenset({400}),
         )
     except RateLimitedError:
         raise
@@ -307,6 +332,23 @@ async def fetch_history_conditional(
         "error_limit_remain": error_limit_remaining(response),
         "rate_limit_remain": rate_limit_remaining(response),
     }
+
+    if response.status_code == 400:
+        # Проверено 19.08.2026: у части газов (Chartreuse и Gamboge Cytoserocin)
+        # истории нет ни в одном регионе, хотя стакан по ним отдаётся нормально.
+        # Спрашивать её каждые сутки бессмысленно и вредно: каждый такой ответ
+        # стоит пять токенов лимита ошибок.
+        if _not_tradable(response):
+            return HistorySnapshot(
+                region_id, type_id, not_tradable=True, requests_made=1, **limits
+            )
+        return HistorySnapshot(
+            region_id,
+            type_id,
+            error=f"ESI ответил 400 на запрос истории сделок: {_error_text(response)}",
+            requests_made=1,
+            **limits,
+        )
 
     if response.status_code == 304:
         return HistorySnapshot(

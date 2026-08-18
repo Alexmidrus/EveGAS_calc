@@ -66,6 +66,12 @@ CONCURRENCY = 5
 # и упереться в него означает, что отбрасываться начнут все запросы.
 ERROR_LIMIT_FLOOR = 10
 
+# Через сколько перепроверять тип, по которому ESI сказал «не торгуется».
+# Каждый такой ответ стоит пять токенов лимита ошибок, а 20 таких пар в обходе
+# способны сами по себе прервать цикл. Раз в месяц — на случай, если CCP
+# заведёт тип на рынок.
+NOT_TRADABLE_RECHECK = timedelta(days=30)
+
 EXIT_OK = 0
 EXIT_PARTIAL = 1
 EXIT_ABORTED = 2
@@ -82,6 +88,7 @@ class Stats:
     written: int = 0
     not_modified: int = 0
     skipped_fresh: int = 0
+    not_tradable: int = 0
     aborted_reason: str | None = None
     failures: list[str] = field(default_factory=list)
 
@@ -160,6 +167,7 @@ def _known_state(engine: Engine) -> dict[tuple[int, int], MarketHistoryState]:
                 last_modified=row.last_modified,
                 checked_at=row.checked_at,
                 expires_at=row.expires_at,
+                tradable=row.tradable,
             )
             for row in rows
         }
@@ -265,7 +273,14 @@ def _touch(engine: Engine, target: Target, snapshot: HistorySnapshot) -> None:
         _remember(session, target, snapshot, checked_at=utcnow())
 
 
-def _remember(session, target: Target, snapshot: HistorySnapshot, *, checked_at) -> None:
+def _remember(
+    session,
+    target: Target,
+    snapshot: HistorySnapshot,
+    *,
+    checked_at,
+    expires_at=None,
+) -> None:
     """Пишет состояние условных запросов по паре."""
     row = session.get(MarketHistoryState, (target.region_id, target.type_id))
     if row is None:
@@ -275,9 +290,24 @@ def _remember(session, target: Target, snapshot: HistorySnapshot, *, checked_at)
         row.etag = snapshot.etag
     if snapshot.last_modified:
         row.last_modified = snapshot.last_modified
-    if snapshot.expires_at is not None:
+    if expires_at is not None:
+        row.expires_at = expires_at
+    elif snapshot.expires_at is not None:
         row.expires_at = snapshot.expires_at
+    row.tradable = not snapshot.not_tradable
     row.checked_at = checked_at
+
+
+def _mark_not_tradable(engine: Engine, target: Target, snapshot: HistorySnapshot) -> None:
+    """Запоминает, что истории по типу нет и спрашивать её ежедневно не нужно.
+
+    Не ошибка: ESI ответил по существу. Проверено 19.08.2026 — Chartreuse
+    и Gamboge Cytoserocin не торгуются на рынке ни в одном регионе, хотя
+    стакан по ним отдаётся нормально.
+    """
+    now = utcnow()
+    with session_scope(engine) as session:
+        _remember(session, target, snapshot, checked_at=now, expires_at=now + NOT_TRADABLE_RECHECK)
 
 
 async def run_collection(
@@ -359,6 +389,14 @@ async def run_collection(
             log.error("Цикл прерван: %s", stats.aborted_reason)
             break
 
+        if result.not_tradable:
+            # Ответ по существу: истории по типу нет и не будет. Считать это
+            # ошибкой значило бы каждый день ставить статус partial на ровном
+            # месте и жечь лимит ошибок ESI.
+            stats.not_tradable += 1
+            if not dry_run:
+                _mark_not_tradable(engine, target, result)
+            continue
         if result.not_modified:
             stats.not_modified += 1
             if not dry_run:
@@ -430,11 +468,12 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     log.info(
         "Итог: запросов %d, записано дней %d, подтверждено без изменений %d, "
-        "пропущено свежих %d, ошибок %d, статус %s",
+        "пропущено свежих %d, не торгуется на рынке %d, ошибок %d, статус %s",
         stats.requests_made,
         stats.written,
         stats.not_modified,
         stats.skipped_fresh,
+        stats.not_tradable,
         stats.errors,
         stats.status,
     )

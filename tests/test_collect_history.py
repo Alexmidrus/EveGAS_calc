@@ -254,6 +254,42 @@ class TestFailures:
         assert "Лимит ошибок" in stats.aborted_reason
 
 
+class TestNotTradable:
+    """«Type not tradable on market!» — ответ по существу, а не сбой.
+
+    Проверено на живом ESI 19.08.2026: Chartreuse и Gamboge Cytoserocin
+    не торгуются на рынке ни в одном регионе, хотя стакан по ним отдаётся.
+    """
+
+    NOT_TRADABLE = httpx.Response(400, json={"error": "Type not tradable on market!"})
+
+    def test_not_counted_as_error(self, engine, targets):
+        stats = run(engine, targets, client_returning(self.NOT_TRADABLE))
+        assert stats.not_tradable == 1
+        assert stats.errors == 0
+        assert stats.status == "ok"
+
+    def test_remembered_and_not_asked_daily(self, engine, targets):
+        """Каждый такой ответ стоит пять токенов лимита ошибок — хватит одного."""
+        run(engine, targets, client_returning(self.NOT_TRADABLE))
+        with session_scope(engine) as session:
+            state = session.scalars(select(MarketHistoryState)).one()
+            assert state.tradable is False
+            assert state.expires_at > utcnow() + timedelta(days=25)
+
+        record: list[httpx.Request] = []
+        stats = run(engine, targets, client_returning(self.NOT_TRADABLE, record=record))
+        assert record == []
+        assert stats.skipped_fresh == 1
+
+    def test_other_400_is_still_an_error(self, engine, targets):
+        """Терпимость — только к известному ответу, остальные 400 остаются сбоем."""
+        response = httpx.Response(400, json={"error": "Compatibility date is in the future"})
+        stats = run(engine, targets, client_returning(response))
+        assert stats.errors == 1
+        assert stats.not_tradable == 0
+
+
 class TestDryRun:
     def test_nothing_written(self, engine, targets):
         stats = run(engine, targets, client_returning(ok_response()), dry_run=True)

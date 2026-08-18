@@ -186,6 +186,11 @@ class MarketHistoryState(Base):
     last_modified: Mapped[str | None] = mapped_column(String(64), default=None)
     checked_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
+    # False — ESI отвечает «Type not tradable on market!»: истории по типу нет
+    # ни в одном регионе, хотя стакан по нему отдаётся. Проверено 19.08.2026
+    # на Chartreuse и Gamboge Cytoserocin. Колонка нужна, чтобы не спрашивать
+    # такие типы каждые сутки: каждый ответ 400 стоит пять токенов лимита ошибок.
+    tradable: Mapped[bool] = mapped_column(default=True)
 
 
 class UserAccount(Base):
