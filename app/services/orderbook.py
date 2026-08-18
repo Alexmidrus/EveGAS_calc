@@ -28,12 +28,16 @@ class Quote:
     filled    — сколько юнитов удалось набрать (не больше needed).
     available — сколько всего юнитов в пригодной части книги.
     needed    — сколько было нужно.
+    dropped   — сколько уровней выброшено как выбросы (ESI §5.4). Фильтр меняет
+                цифру, за которой пришёл человек, поэтому число обязано дойти
+                до интерфейса, а не остаться внутри модуля.
     """
 
     price: float | None
     filled: int
     available: int
     needed: int
+    dropped: int = 0
 
     @property
     def shallow(self) -> bool:
@@ -65,39 +69,70 @@ def _alive(orders: list[dict], *, is_buy: bool) -> list[dict]:
     ]
 
 
-def drop_outliers(orders: list[dict]) -> list[dict]:
-    """Выбрасывает ордера, чья цена отличается от медианы книги больше чем в 100 раз.
+def outlier_bounds(prices: Sequence[float]) -> tuple[float, float] | None:
+    """Границы «не мусорной» цены по медиане книги: (низ, верх).
 
     Отсечение по медиане, а не по среднему: среднее сам выброс и утаскивает.
-    На книге из одного ордера сравнивать не с чем — возвращаем как есть.
+    На книге из одного ордера сравнивать не с чем, на нулевой медиане — тем
+    более; в обоих случаях возвращается None и фильтр не применяется.
+
+    Известный предел правила: опора взята из самой книги. Пока мусор
+    в меньшинстве, медиана держится за настоящие ордера. Когда мусора больше
+    половины — медиана переезжает к нему, и фильтр начинает выбрасывать
+    настоящий ордер. Внешняя опора на историю сделок — ESI §5.4.
     """
-    if len(orders) < 2:
-        return list(orders)
-    med = median(float(o["price"]) for o in orders)
+    if len(prices) < 2:
+        return None
+    med = median(prices)
     if med <= 0:
+        return None
+    return med / ORDERBOOK_OUTLIER_FACTOR, med * ORDERBOOK_OUTLIER_FACTOR
+
+
+def drop_outliers(orders: list[dict]) -> list[dict]:
+    """Выбрасывает ордера, чья цена отличается от медианы книги больше чем в 100 раз."""
+    bounds = outlier_bounds([float(o["price"]) for o in orders])
+    if bounds is None:
         return list(orders)
-    high = med * ORDERBOOK_OUTLIER_FACTOR
-    low = med / ORDERBOOK_OUTLIER_FACTOR
+    low, high = bounds
     return [o for o in orders if low <= float(o["price"]) <= high]
 
 
-def sell_orders(orders: list[dict], hub: Hub) -> list[dict]:
-    """Sell-ордера целевого хаба, по возрастанию цены (ESI §3.1).
+def drop_outlier_levels(
+    levels: Sequence[tuple[Decimal, int, int]],
+) -> list[tuple[Decimal, int, int]]:
+    """То же правило, но на сохранённой лестнице.
+
+    С этапа 11 отсечение делается при чтении из базы, а не при сборе: правило
+    срабатывало до записи, и в мусорной книге настоящий ордер до базы просто
+    не доезжал — чинить его потом было бы нечем (ESI §5.4).
+    """
+    bounds = outlier_bounds([float(price) for price, _volume, _min_volume in levels])
+    if bounds is None:
+        return list(levels)
+    low, high = bounds
+    return [level for level in levels if low <= float(level[0]) <= high]
+
+
+def selected_sells(orders: list[dict], hub: Hub) -> list[dict]:
+    """Sell-ордера целевого хаба, по возрастанию цены (ESI §3.1). Без очистки.
 
     Берём только ордера самой станции: поле range для sell смысла не имеет,
     а ордера в других станциях того же региона — это другой рынок.
+
+    Отбор не зависит ни от объёма пользователя, ни от истории сделок, поэтому
+    делается один раз в сборщике и в базу едет уже в этом виде.
     """
     sells = [
         o for o in _alive(orders, is_buy=False)
         if o.get("location_id") == hub.station_id
     ]
-    sells = drop_outliers(sells)
     sells.sort(key=lambda o: float(o["price"]))
     return sells
 
 
-def buy_orders(orders: list[dict], hub: Hub, needed: int) -> list[dict]:
-    """Buy-ордера, конкурирующие в хабе, по убыванию цены (ESI §3.2).
+def selected_buys(orders: list[dict], hub: Hub) -> list[dict]:
+    """Buy-ордера, конкурирующие в хабе, по убыванию цены (ESI §3.2). Без очистки.
 
     Берём все региональные ордера плюс любые ордера из системы хаба. Ордер,
     выставленный в соседней системе с радиусом region, реально конкурирует
@@ -108,8 +143,8 @@ def buy_orders(orders: list[dict], hub: Hub, needed: int) -> list[dict]:
     радиусом (5, 10, 20...) из соседних систем не видны — для их учёта нужна
     карта прыжков из SDE, а SDE в рантайм мы намеренно не тянем.
 
-    needed отсекает ордера, чей min_volume больше нужного количества: такой
-    ордер физически не исполнить (ESI §4).
+    Отсечение по min_volume здесь не делается: оно зависит от нужного
+    количества, а сборщик его не знает.
     """
     system_id = hub_system_id(orders, hub)
     buys = [
@@ -119,49 +154,59 @@ def buy_orders(orders: list[dict], hub: Hub, needed: int) -> list[dict]:
             or o.get("location_id") == hub.station_id
             or (system_id is not None and o.get("system_id") == system_id)
         )
-        and int(o.get("min_volume", 1)) <= needed
     ]
-    buys = drop_outliers(buys)
     buys.sort(key=lambda o: float(o["price"]), reverse=True)
     return buys
+
+
+def sell_orders(orders: list[dict], hub: Hub) -> list[dict]:
+    """Sell-ордера хаба, очищенные от выбросов: разбор сырого стакана целиком."""
+    return drop_outliers(selected_sells(orders, hub))
+
+
+def buy_orders(orders: list[dict], hub: Hub, needed: int) -> list[dict]:
+    """Buy-ордера хаба под нужный объём, очищенные от выбросов (ESI §3.2, §4).
+
+    needed отсекает ордера, чей min_volume больше нужного количества: такой
+    ордер физически не исполнить (ESI §4).
+    """
+    buys = [
+        o for o in selected_buys(orders, hub)
+        if int(o.get("min_volume", 1)) <= needed
+    ]
+    return drop_outliers(buys)
 
 
 def ladder_from_orders(
     orders: list[dict], hub: Hub, side: OrderSide
 ) -> list[tuple[str, int, int]]:
-    """Очищенная лестница стакана для хранения в базе (ROADMAP, этап 7).
+    """Лестница стакана для хранения в базе (ROADMAP, этапы 7 и 11).
 
-    Возвращает уровни (цена строкой, доступный объём, min_volume), уже
-    отфильтрованные и отсортированные под свою сторону.
+    Возвращает уровни (цена строкой, доступный объём, min_volume), отобранные
+    и отсортированные под свою сторону.
 
     Что сделано здесь и не переделывается при чтении: отбор по станции и
-    радиусу, выброс мёртвых ордеров и выбросов по медиане, сортировка.
-    Всё это от объёма пользователя не зависит.
+    радиусу, выброс мёртвых ордеров, сортировка. Всё это от объёма
+    пользователя не зависит и от истории сделок тоже.
 
-    Что **не** сделано здесь: отсечение buy-ордеров по `min_volume` и сам VWAP.
-    И то, и другое зависит от нужного количества, а сборщик его не знает —
-    поэтому min_volume едет в базу третьим числом каждого уровня.
+    Что **не** сделано здесь: отсечение выбросов, отсечение buy-ордеров по
+    `min_volume` и сам VWAP.
+
+    Выбросы с этапа 11 отсекаются при чтении (ESI §5.4). Раньше очистка шла
+    здесь, до записи, и это ломало главный случай: если мусора в книге больше
+    половины, медиана переезжает к нему и выбрасывает настоящий ордер — тот
+    самый buy на 6000 при трёх скам-ордерах по 1 ISK. В базу он тогда просто
+    не попадал, и чинить это при чтении было уже нечем. Теперь в базе лежит
+    то, что реально отдал ESI.
 
     Цена — строкой: во float 2750.10 хранится с хвостом, а нам эти копейки
     ещё считать.
     """
-    if side is OrderSide.BUY:
-        # needed=0 отключил бы фильтр по min_volume целиком, поэтому берём
-        # сам фильтр отдельно: здесь нужен только отбор по радиусу и очистка
-        system_id = hub_system_id(orders, hub)
-        book = [
-            o
-            for o in _alive(orders, is_buy=True)
-            if (
-                o.get("range") == RANGE_REGION
-                or o.get("location_id") == hub.station_id
-                or (system_id is not None and o.get("system_id") == system_id)
-            )
-        ]
-        book = drop_outliers(book)
-        book.sort(key=lambda o: float(o["price"]), reverse=True)
-    else:
-        book = sell_orders(orders, hub)
+    book = (
+        selected_buys(orders, hub)
+        if side is OrderSide.BUY
+        else selected_sells(orders, hub)
+    )
 
     return [
         (
@@ -210,24 +255,35 @@ def quote(orders: list[dict], hub: Hub, side: OrderSide, needed: int) -> Quote:
     if needed <= 0:
         raise ValueError(f"Нужное количество должно быть больше нуля, получено: {needed}")
 
-    book = (
-        buy_orders(orders, hub, needed)
+    selected = (
+        [o for o in selected_buys(orders, hub) if int(o.get("min_volume", 1)) <= needed]
         if side is OrderSide.BUY
-        else sell_orders(orders, hub)
+        else selected_sells(orders, hub)
     )
+    book = drop_outliers(selected)
     price, filled = vwap(book, needed)
     available = sum(int(o["volume_remain"]) for o in book)
-    return Quote(price=price, filled=filled, available=available, needed=needed)
+    return Quote(
+        price=price,
+        filled=filled,
+        available=available,
+        needed=needed,
+        dropped=len(selected) - len(book),
+    )
 
 
 def quote_from_ladder(
     levels: Sequence[tuple[Decimal, int, int]], side: OrderSide, needed: int
 ) -> Quote:
-    """Разбор сохранённой лестницы под фактический объём (ROADMAP, этап 8).
+    """Разбор сохранённой лестницы под фактический объём (ROADMAP, этапы 8 и 11).
 
-    Обратная сторона ladder_from_orders. Сборщик сложил в базу всё, что от
-    объёма не зависит: отбор по станции и радиусу, очистку от выбросов,
-    сортировку. Здесь доделывается то, что без объёма сделать было нельзя.
+    Обратная сторона ladder_from_orders. Сборщик сложил в базу то, что от
+    объёма не зависит: отбор по станции и радиусу и сортировку. Здесь
+    доделывается всё остальное.
+
+    Порядок важен. Сначала отсечение выбросов, потом min_volume: медиана должна
+    описывать рынок целиком, а min_volume — это про нашу исполнимость, и сужать
+    им книгу до расчёта медианы значит считать опору по огрызку.
 
     Для buy отсекаются уровни с min_volume больше нужного количества: такой
     ордер физически не исполнить (ESI §4). Для sell min_volume не смотрим —
@@ -239,9 +295,10 @@ def quote_from_ladder(
     if needed <= 0:
         raise ValueError(f"Нужное количество должно быть больше нуля, получено: {needed}")
 
+    clean = drop_outlier_levels(levels)
     usable = [
         (price, volume)
-        for price, volume, min_volume in levels
+        for price, volume, min_volume in clean
         if side is not OrderSide.BUY or min_volume <= needed
     ]
 
@@ -262,4 +319,5 @@ def quote_from_ladder(
         filled=filled,
         available=available,
         needed=needed,
+        dropped=len(levels) - len(clean),
     )

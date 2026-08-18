@@ -9,6 +9,7 @@
 """
 
 import json
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -246,3 +247,81 @@ def test_quote_available_counts_whole_book_not_just_walked(jita_orders):
     q = orderbook.quote(jita_orders, JITA, OrderSide.SELL, needed=100)
     assert q.filled == 100
     assert q.available == 142_000
+# --- Очистка переехала в чтение (ESI §5.4, этап 11) ---
+
+
+def _buy(price: float, volume: int = 100, min_volume: int = 1) -> dict:
+    """Buy-ордер, дотягивающийся до Jita: минимум полей для разбора."""
+    return {
+        "is_buy_order": True,
+        "price": price,
+        "volume_remain": volume,
+        "location_id": JITA.station_id,
+        "system_id": JITA.system_id,
+        "range": "region",
+        "min_volume": min_volume,
+    }
+
+
+def test_ladder_keeps_outliers():
+    """Лестница едет в базу сырой: выбросы отсекаются при чтении, не при сборе."""
+    orders = [_buy(3000.0), _buy(3000.0), _buy(0.01)]
+    levels = orderbook.ladder_from_orders(orders, JITA, OrderSide.BUY)
+    assert [price for price, _v, _mv in levels] == ["3000.00", "3000.00", "0.01"]
+
+
+def test_ladder_keeps_real_order_in_garbage_book():
+    """Главный случай Rens: настоящий ордер обязан дойти до базы.
+
+    Мусора в книге больше половины, и медиана переезжает к нему. Пока очистка
+    жила в сборщике, уровень 6000 в базу не попадал вовсе — чинить его потом
+    было нечем. Сама цена здесь ещё неправильная: её выправит коридор по
+    истории сделок (ESI §5.4), но данные для этого уже сохранены.
+    """
+    orders = [_buy(1.0), _buy(1.0), _buy(1.0), _buy(6000.0)]
+    levels = orderbook.ladder_from_orders(orders, JITA, OrderSide.BUY)
+    assert "6000.00" in [price for price, _v, _mv in levels]
+
+
+def test_quote_from_ladder_drops_outliers():
+    """При чтении правило §4 работает: 0.01 при медиане 3000 в расчёт не идёт."""
+    levels = [
+        (Decimal("3000.00"), 100, 1),
+        (Decimal("3000.00"), 100, 1),
+        (Decimal("0.01"), 100, 1),
+    ]
+    q = orderbook.quote_from_ladder(levels, OrderSide.BUY, needed=200)
+    assert q.price == pytest.approx(3000.0)
+    assert q.available == 200
+    assert q.dropped == 1
+
+
+def test_quote_from_ladder_without_outliers_drops_nothing():
+    levels = [(Decimal("3000.00"), 100, 1), (Decimal("2900.00"), 100, 1)]
+    q = orderbook.quote_from_ladder(levels, OrderSide.BUY, needed=200)
+    assert q.dropped == 0
+    assert q.available == 200
+
+
+def test_quote_from_ladder_cleans_before_min_volume():
+    """Порядок операций: сначала выбросы по медиане, потом min_volume.
+
+    Если сузить книгу по min_volume раньше, медиана посчитается по огрызку из
+    двух мусорных уровней, оба окажутся «нормой» и дадут цену 0.01 за юнит.
+    """
+    levels = [
+        (Decimal("3000.00"), 100, 999),
+        (Decimal("3000.00"), 100, 999),
+        (Decimal("0.01"), 100, 1),
+        (Decimal("0.01"), 100, 1),
+    ]
+    q = orderbook.quote_from_ladder(levels, OrderSide.BUY, needed=10)
+    assert q.price is None
+    assert q.dropped == 2
+
+
+def test_quote_reports_dropped_on_raw_book(jita_orders):
+    """Разбор сырого стакана тоже сообщает, сколько уровней выброшено."""
+    orders = [*jita_orders, _buy(0.01)]
+    q = orderbook.quote(orders, JITA, OrderSide.BUY, needed=50_000)
+    assert q.dropped == 1
