@@ -175,3 +175,37 @@ class TestDefaults:
         assert stats.band() is None
         assert stats.out_of_band(1.0) is False
         assert stats.unconfirmed(1.0) is False
+
+class TestSeries:
+    """Серия для спарклайна «7 дней» (ROADMAP, пункт 3 после 0.3.0)."""
+
+    def test_series_follows_dates_not_input_order(self):
+        """Линия рисуется слева направо по времени, а не по порядку строк базы."""
+        shuffled = days(100, 200, 300)
+        shuffled.reverse()
+        assert summarize(shuffled, today=TODAY).series == (100.0, 200.0, 300.0)
+
+    def test_days_without_trades_are_not_in_the_line(self):
+        """День без единой сделки цену не подтверждает — вести через него линию
+        значит нарисовать движение, которого не было."""
+        traded = days(100, 200)
+        quiet = days(999, volume=0, start=TODAY - timedelta(days=2))
+        assert summarize(traded + quiet, today=TODAY).series == (100.0, 200.0)
+
+    def test_series_matches_reference_window(self):
+        """В серию попадают ровно те дни, по которым считается опора."""
+        stats = summarize(days(*range(1, 12)), today=TODAY)
+        assert len(stats.series) == stats.traded_days
+
+    def test_empty_history_has_no_series(self):
+        assert summarize([]).series == ()
+
+    def test_borrowed_stats_have_no_series(self):
+        """Коридор занять у соседних хабов можно, недельное движение — нет:
+        это цена других регионов, и выдавать её за свою нельзя."""
+        from app.services.history import borrow
+
+        neighbours = [summarize(days(100, 110, 120), today=TODAY) for _ in range(3)]
+        spare = borrow(neighbours)
+        assert spare.usable and spare.borrowed
+        assert spare.series == ()

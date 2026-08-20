@@ -33,8 +33,11 @@ from app.formatting import (
     bar_width,
     fmt_compact,
     fmt_number,
+    fmt_percent,
     fmt_share,
     share_percents,
+    sparkline_change_pct,
+    sparkline_points,
 )
 from app.db import utcnow
 from app.services import prices, user_settings
@@ -279,6 +282,7 @@ def _history_rows(gas: Gas, scenarios: Sequence[object]) -> dict[str, dict[str, 
             # Заимствованный свод показывается с оговоркой, а не выдаётся
             # за свой: оборота этого региона мы не знаем (ESI §5.5)
             "borrowed": stats.borrowed,
+            "series": stats.series,
             "unconfirmed": stats.unconfirmed(scenario.price),
             "short_of_volume": stats.short_of_volume(scenario.qty),
             "slow_for_volume": stats.slow_for_volume(scenario.qty),
@@ -477,6 +481,10 @@ ISK_BAR_MIN_PCT = 6.0
 ISK_BAR_SPAN_PCT = 76.0
 # Огрызок полоски ликвидности: нулевая ширина читалась бы как «данных нет»
 LIQ_BAR_MIN_PCT = 4.0
+# Насколько цена должна уйти за неделю, чтобы спарклайн назвал это движением.
+# Ниже порога линия рисуется нейтральным цветом: недельный шум в полпроцента —
+# не тренд, и красить его в «дешевеет» значит обещать то, чего мы не знаем.
+SPARK_FLAT_PCT = 2.0
 
 
 def scenario_slots() -> int:
@@ -549,6 +557,46 @@ def _row_view(
         # Дублировать его здесь значит сказать одно и то же двумя цифрами.
         liquidity_tone, liquidity_note = "ok", ""
 
+    # Спарклайн «7 дней»: форма движения дневных средних по паре «регион + тип».
+    # Сторону история не разделяет, поэтому у sell и buy одного хаба линия одна
+    # и та же — это свойство данных ESI (§5.2), а не недосмотр.
+    series: tuple[float, ...] = tuple(history["series"]) if history is not None else ()
+    spark_points = sparkline_points(series)
+    spark_change = sparkline_change_pct(series)
+
+    if not spark_points or spark_change is None:
+        # Линии нет — молчим числом, но объясняем словом: пустая ячейка без
+        # подсказки читается как поломка. Причины две, и путать их нельзя:
+        # заимствованный свод — это «своей истории у хаба нет вовсе», а не
+        # «сделок было мало».
+        spark_tone = "flat"
+        if history is not None and history["borrowed"]:
+            spark_title = (
+                "Недельной линии нет: своей истории по этому хабу нет, "
+                "коридор цен взят по другим хабам — чужое движение здесь "
+                "рисовать нечестно"
+            )
+        else:
+            spark_title = (
+                "Недельной линии нет: в истории по этому хабу меньше двух дней "
+                "с реальными сделками"
+            )
+    else:
+        # Приложение покупает газ, а не продаёт его: дешевеющая цена — хорошая
+        # новость, и зелёный тут именно за падение. В макете цвета стоят
+        # наоборот, но макет не источник смысла (CLAUDE.md).
+        if spark_change <= -SPARK_FLAT_PCT:
+            spark_tone, spark_verdict = "good", "дешевеет"
+        elif spark_change >= SPARK_FLAT_PCT:
+            spark_tone, spark_verdict = "bad", "дорожает"
+        else:
+            spark_tone, spark_verdict = "flat", "без движения"
+        spark_title = (
+            f"{len(series)} дн.: {fmt_number(series[0])} → {fmt_number(series[-1])} ISK, "
+            f"{'+' if spark_change > 0 else ''}{fmt_percent(spark_change, 1)}"
+            f" — {spark_verdict}. Дневные средние сделок по региону, обе стороны вместе"
+        )
+
     if scenario.delta_pct is None:
         delta_tone = "muted"
     elif scenario.delta_pct > DELTA_BAD_PCT:
@@ -582,6 +630,9 @@ def _row_view(
         ),
         "liquidity_tone": liquidity_tone,
         "liquidity_note": liquidity_note,
+        "spark_points": spark_points,
+        "spark_tone": spark_tone,
+        "spark_title": spark_title,
         # Три значка макета поверх пяти внутренних пометок (ROADMAP 12.5)
         "flag_no_trades": unconfirmed,
         "flag_anomaly": outlier,

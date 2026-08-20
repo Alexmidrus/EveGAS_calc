@@ -431,3 +431,71 @@ class TestViewMath:
         assert fmt_share(0.5) == "<1"
         assert fmt_share(0) == "0"
         assert fmt_share(14.3) == "14"
+
+class TestSparkline:
+    """Спарклайн «7 дней» в строке результата (ROADMAP, пункт 3 после 0.3.0)."""
+
+    def test_points_span_the_whole_width(self):
+        """Линия начинается у левого края и заканчивается у правого."""
+        from app.formatting import SPARK_WIDTH, sparkline_points
+
+        points = sparkline_points([1, 2, 3, 4]).split()
+        assert points[0].startswith("0.0,")
+        assert points[-1].startswith(f"{SPARK_WIDTH:.1f},")
+
+    def test_line_stays_inside_the_viewbox(self):
+        """Иначе линию срежет краем: у полоски толщина, а у viewBox границы."""
+        from app.formatting import SPARK_HEIGHT, SPARK_PADDING, sparkline_points
+
+        ys = [
+            float(pair.split(",")[1])
+            for pair in sparkline_points([5, 900, 17, 240, 3]).split()
+        ]
+        assert min(ys) >= SPARK_PADDING
+        assert max(ys) <= SPARK_HEIGHT - SPARK_PADDING
+
+    def test_expensive_day_is_higher_on_screen(self):
+        """Ось Y в SVG растёт вниз, и перепутать её значит перевернуть график."""
+        from app.formatting import sparkline_points
+
+        first, last = sparkline_points([100, 200]).split()
+        assert float(first.split(",")[1]) > float(last.split(",")[1])
+
+    def test_flat_series_sits_in_the_middle(self):
+        """Ровная линия у нижнего края читается как «упало в пол»."""
+        from app.formatting import SPARK_HEIGHT, sparkline_points
+
+        ys = {pair.split(",")[1] for pair in sparkline_points([7, 7, 7]).split()}
+        assert ys == {f"{SPARK_HEIGHT / 2:.1f}"}
+
+    def test_one_point_is_not_a_line(self):
+        """По одному дню недельного движения не покажешь."""
+        from app.formatting import sparkline_points
+
+        assert sparkline_points([42]) == ""
+        assert sparkline_points([]) == ""
+
+    def test_change_percent(self):
+        from app.formatting import sparkline_change_pct
+
+        assert sparkline_change_pct([100, 150]) == pytest.approx(50.0)
+        assert sparkline_change_pct([100, 90]) == pytest.approx(-10.0)
+        assert sparkline_change_pct([100]) is None
+        assert sparkline_change_pct([0, 50]) is None
+
+    def test_column_is_no_longer_pending(self, client):
+        """Пункт закрыт: заголовок «7 дней» больше не помечен как нерабочий."""
+        html = client.post("/calculate", data=CONTROL_FORM).get_data(as_text=True)
+        assert "7 дней" in html
+        assert '>7 дней</th>' in html
+        assert 'pending" title="функционал ещё не сделан">7 дней' not in html
+
+    def test_missing_history_says_why(self, client):
+        """Без истории ячейка не пустая: прочерк и объяснение в подсказке.
+
+        Контрольный пример вводится руками и базы истории под собой не имеет —
+        ровно тот случай, когда линии нет.
+        """
+        html = client.post("/calculate", data=CONTROL_FORM).get_data(as_text=True)
+        assert 'class="cell-spark"' in html
+        assert "Недельной линии нет" in html

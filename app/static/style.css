@@ -908,6 +908,15 @@ tr.best .hub-name { color: var(--gold); }
 .cell-num--soft { color: var(--fg2); }
 .cell-sub { font-family: var(--font-num); font-size: 11px; color: var(--fg3); }
 
+/* Спарклайн «7 дней». Цвет задаётся классом тона и подхватывается линией
+   через currentColor: цвет по данным, а не инлайновым стилем (SPEC §10.3).
+   Зелёный здесь за падение цены — приложение газ покупает. */
+.cell-spark { text-align: center; padding: 5px 8px 3px; }
+.spark { display: block; margin: 0 auto; overflow: visible; }
+.spark--good { color: var(--green); }
+.spark--bad { color: var(--red); }
+.spark--flat { color: var(--fg3); }
+
 .cell-liquidity { min-width: 118px; white-space: normal; }
 .cell-stack { min-width: 130px; white-space: normal; }
 .cell-isk { min-width: 128px; }

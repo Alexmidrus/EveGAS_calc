@@ -94,7 +94,7 @@
       <th class="col">Хаб</th>
       <th class="col">Что берём</th>
       <th class="col col--num divider">Цена</th>
-      <th class="col pending" title="функционал ещё не сделан">7 дней</th>
+      <th class="col">7 дней</th>
       <th class="col col--num">Сделки</th>
       <th class="col">Ликвидность</th>
       <th class="col col--num divider">Купить</th>
@@ -133,7 +133,17 @@
         </div>
       </td>
       <td class="cell-num cell-num--price divider">{{ s.price|num }}</td>
-      <td class="cell-sub pending" title="функционал ещё не сделан">—</td>
+      {# Спарклайн недельного движения. Точки считает сервер: арифметики
+         в шаблоне быть не должно #}
+      <td class="cell-spark" title="{{ row.spark_title }}">
+        {% if row.spark_points %}
+        <svg class="spark spark--{{ row.spark_tone }}" width="58" height="16"
+             viewBox="0 0 58 16" preserveAspectRatio="none" aria-hidden="true">
+          <polyline points="{{ row.spark_points }}" fill="none"
+                    stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+        </svg>
+        {% else %}<span class="cell-sub">—</span>{% endif %}
+      </td>
       <td class="cell-num">
         {% if h %}{{ h.reference|num }}
         <div class="cell-sub">{{ h.lowest|num }} … {{ h.highest|num }}</div>

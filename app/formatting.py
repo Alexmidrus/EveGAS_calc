@@ -73,3 +73,59 @@ def fmt_share(percent: float) -> str:
     if 0 < percent < 1:
         return "<1"
     return fmt_number(percent, 0)
+
+
+# Размер спарклайна «7 дней» в строке результата — из макета (SPEC §5.2).
+# Внутри viewBox, а не в пикселях: SVG растягивается по ячейке.
+SPARK_WIDTH = 58.0
+SPARK_HEIGHT = 16.0
+# Отступ сверху и снизу, чтобы линия толщиной 1.2 не срезалась краем viewBox.
+SPARK_PADDING = 1.0
+
+
+def sparkline_points(
+    values: Sequence[float],
+    width: float = SPARK_WIDTH,
+    height: float = SPARK_HEIGHT,
+    padding: float = SPARK_PADDING,
+) -> str:
+    """Точки для <polyline> спарклайна: «0.0,15.0 9.7,4.2 …».
+
+    Линия растягивается на всю ширину и нормируется по своему же размаху:
+    спарклайн показывает форму движения за неделю, а не абсолютный уровень —
+    уровень стоит числом в соседней колонке «Сделки».
+
+    Меньше двух точек — пустая строка: одна точка это не линия, и рисовать
+    по ней горизонталь значит показать «неделю без изменений» там, где у нас
+    просто один день данных.
+
+    Ровная серия кладётся по середине, а не по нижнему краю: линия у самого
+    низа читается как «упало в пол», хотя цена не двигалась вовсе.
+    """
+    if len(values) < 2:
+        return ""
+
+    low, high = min(values), max(values)
+    span = high - low
+    step = width / (len(values) - 1)
+    # Сверху и снизу остаётся padding, остальное — под размах
+    usable = height - padding * 2
+
+    points = []
+    for index, value in enumerate(values):
+        share = (value - low) / span if span > 0 else 0.5
+        x = index * step
+        # Ось Y в SVG растёт вниз: дорогой день должен оказаться выше
+        y = height - padding - share * usable
+        points.append(f"{x:.1f},{y:.1f}")
+    return " ".join(points)
+
+
+def sparkline_change_pct(values: Sequence[float]) -> float | None:
+    """На сколько процентов последний день окна отличается от первого.
+
+    None — считать не от чего: нет двух точек или первый день нулевой.
+    """
+    if len(values) < 2 or values[0] <= 0:
+        return None
+    return (values[-1] / values[0] - 1) * 100

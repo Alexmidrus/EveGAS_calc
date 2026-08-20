@@ -54,6 +54,12 @@ class HistoryStats:
     window_days: int = HISTORY_REFERENCE_DAYS
     last_day: date | None = None
     fresh: bool = False
+    # Дневные средние по окну в порядке дат — то, из чего рисуется спарклайн
+    # «7 дней». Только дни с оборотом: цена дня без единой сделки ничего
+    # не показывает, а линию через неё вести значит рисовать выдуманное
+    # движение. Дней в серии поэтому бывает меньше окна, и это нормально —
+    # ESI не отдаёт дни, в которые не торговали (ESI §5.2).
+    series: tuple[float, ...] = ()
     # Опора взята из других регионов, потому что своей не было (см. borrow).
     # Такой свод годится как коридор, но не годится как показания: оборота
     # этого региона мы не знаем и выдавать чужой за свой не станем.
@@ -169,6 +175,9 @@ def borrow(others: Sequence[HistoryStats]) -> HistoryStats:
         last_day=max(stats.last_day for stats in usable if stats.last_day is not None),
         fresh=True,
         borrowed=True,
+        # Серия остаётся пустой намеренно: недельная линия чужих регионов —
+        # это не движение цены в этом хабе, и рисовать её здесь значит врать.
+        # Коридор заимствовать можно, показания — нет.
     )
 
 
@@ -210,4 +219,5 @@ def summarize(
         window_days=window,
         last_day=last_day,
         fresh=(now - last_day).days <= max_age,
+        series=tuple(day.average for day in sorted(traded, key=lambda d: d.date)),
     )
