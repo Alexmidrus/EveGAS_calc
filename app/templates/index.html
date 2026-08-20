@@ -1,25 +1,90 @@
 <!doctype html>
-<html lang="ru">
+<html lang="ru" data-theme="dark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>EveCraft GasLens — EVE Online Gas Market Analyzer</title>
+  <title>GasLens by EveCraft — EVE Online Gas Market Analyzer</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  {# Тема применяется до первой отрисовки, иначе тёмная страница мигает светлой
+     (SPEC §10.3). Скрипт крошечный и обязан стоять именно здесь: внешний файл
+     подключается ниже и выполнится уже после первого кадра. #}
+  <script>
+    (function () {
+      try {
+        var saved = localStorage.getItem("gascalc.theme");
+        if (saved === "light" || saved === "dark") {
+          document.documentElement.setAttribute("data-theme", saved);
+        }
+      } catch (e) { /* приватный режим — остаётся тёмная по умолчанию */ }
+    })();
+  </script>
 </head>
 <body{% if character %} data-character="{{ character[0] }}"{% endif %}>
   <header class="topbar">
-    <div>
-      <h1>GasLens <small class="by">by EveCraft</small></h1>
-      <p class="tagline">Где сегодня выгоднее купить газ: сырой против сжатого, пять хабов, доставка учтена.</p>
+    <div class="brand">
+      <span class="brand__name">GasLens</span>
+      <span class="brand__by">by EveCraft</span>
     </div>
-    {# Вход нужен только ради хранения настроек. Без него работает всё. #}
+    <div class="topbar__sep"></div>
+
+    {# Текущий газ и его объёмы: подписи обновляет settings.js по выбору в форме #}
+    <div class="gas-chip">
+      <span class="gas-chip__name" id="header-gas">{{ gas.name }}</span>
+      <span class="gas-chip__volumes" id="gas-volumes">{{ volume_labels[gas.key] }}</span>
+    </div>
+
+    {# Состояния ESI и числа игроков приложение не знает: пользователь к ESI
+       не ходит по определению. Чип остаётся на месте, но честно неактивен. #}
+    <div class="chip chip--fixed chip--esi pending" aria-disabled="true"
+         title="функционал ещё не сделан">
+      <span class="chip__dot"></span>ESI<span class="chip__dim">·</span>
+      <span class="chip__dim">online</span>
+    </div>
+
+    <div class="chip chip--data">
+      {% if price_age %}цены {{ price_age }} назад{% else %}цены не собраны{% endif %}
+      {% if history_day %}<span class="chip__dim">·</span>
+      <span class="chip__dim">история {{ history_day.strftime('%d.%m.%Y') }}</span>{% endif %}
+    </div>
+
+    <div class="topbar__spacer"></div>
+
+    {# Английского интерфейса нет: все тексты зашиты по-русски. Кнопки на месте,
+       но не притворяются рабочими (SPEC §10.7). #}
+    <div class="toggle-group pending" title="функционал ещё не сделан">
+      <button type="button" aria-pressed="true" disabled>RU</button>
+      <button type="button" aria-pressed="false" disabled>EN</button>
+    </div>
+
+    <button type="button" class="icon-button theme-toggle" id="theme-toggle"
+            title="Сменить тему" aria-label="Сменить тему">
+      <svg class="icon-sun" width="14" height="14" viewBox="0 0 16 16" fill="none"
+           stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true">
+        <circle cx="8" cy="8" r="3.1"></circle>
+        <line x1="8" y1="1.2" x2="8" y2="2.9"></line><line x1="8" y1="13.1" x2="8" y2="14.8"></line>
+        <line x1="1.2" y1="8" x2="2.9" y2="8"></line><line x1="13.1" y1="8" x2="14.8" y2="8"></line>
+        <line x1="3.4" y1="3.4" x2="4.6" y2="4.6"></line><line x1="11.4" y1="11.4" x2="12.6" y2="12.6"></line>
+        <line x1="12.6" y1="3.4" x2="11.4" y2="4.6"></line><line x1="4.6" y1="11.4" x2="3.4" y2="12.6"></line>
+      </svg>
+      <svg class="icon-moon" width="14" height="14" viewBox="0 0 16 16" fill="none"
+           stroke="currentColor" stroke-width="1.4" stroke-linecap="round"
+           stroke-linejoin="round" aria-hidden="true">
+        <path d="M13.4 10.2A5.6 5.6 0 0 1 6 2.7a5.9 5.9 0 1 0 7.4 7.5z"></path>
+      </svg>
+    </button>
+
+    {# Вход нужен только ради хранения настроек. Без него работает всё,
+       и анонимный режим обязан выглядеть в шапке не хуже (ROADMAP 12.7). #}
     <div class="account">
       {% if character %}
-      <span class="who">{{ character[1] }}</span>
+      {# Буква в кружке, как в макете. Портрет с images.evetech.net — внешний
+         запрос за картинкой, и это отдельное решение. #}
+      <span class="account__avatar" aria-hidden="true">{{ character[1][0]|upper }}</span>
+      <span class="account__who">{{ character[1] }}</span>
       <form method="post" action="{{ url_for('auth.logout') }}"><button type="submit">Выйти</button></form>
       {% elif sso_enabled %}
       <a class="login" href="{{ url_for('auth.login') }}">Войти через EVE SSO</a>
-      <small>только чтобы сохранять настройки</small>
+      <span class="account__hint">только чтобы сохранять настройки</span>
       {% endif %}
     </div>
   </header>
@@ -41,6 +106,11 @@
   </div>
   {% endif %}
 
+  {# Полоса итогов идёт над колонками во всю ширину, а считается в /calculate.
+     Поэтому она приезжает тем же ответом через hx-swap-oob (SPEC §10.5):
+     второго запроса ради четырёх карточек нет. До первого расчёта пуста. #}
+  <section class="summary" id="summary-bar"></section>
+
   {# Автопересчёт (SPEC §2). События слушаются на форме, поэтому переживают
      подмену сетки через HTMX.
 
@@ -48,33 +118,44 @@
      мышью, автозаполнение и стрелки числового поля, которых keyup не видит.
      Задержка 400 мс стоит на обоих событиях — и чтобы не слать запрос на каждую
      цифру, и чтобы пара input+change от одного чекбокса схлопнулась в один
-     запрос: htmx сбрасывает таймер на каждом событии. Кнопка «Посчитать» остаётся. #}
-  <form id="calc-form" hx-post="/calculate" hx-target="#results" hx-swap="innerHTML"
+     запрос: htmx сбрасывает таймер на каждом событии. Кнопка «Посчитать» остаётся.
+
+     Форма обнимает обе колонки: фильтр «только sell» стоит над таблицей справа,
+     а отправляться обязан вместе с параметрами слева. #}
+  <form id="calc-form" class="layout" hx-post="/calculate" hx-target="#results" hx-swap="innerHTML"
         hx-trigger="submit, input delay:400ms, change delay:400ms, recalc" autocomplete="off">
 
-    {# --- Блок 1. Параметры расчёта (SPEC §3) --- #}
-    <fieldset class="params">
-      <legend>Параметры</legend>
-      <div class="params-grid">
-        <label>Газ
+    <aside class="side">
+
+      {# --- Блок 1. Параметры расчёта (SPEC §3) --- #}
+      <div class="panel-head">
+        <span class="panel-head__title">Параметры</span>
+        <button type="button" class="link-button" id="reset-settings">сбросить</button>
+      </div>
+
+      <div class="params">
+        <label class="field params__wide">
+          <span class="field__label">Газ</span>
           <select name="gas" id="gas-select">
             {% for family, gas_list in gases_by_family.items() %}
             <optgroup label="{{ family_labels[family] }}">
-              {% for gas in gas_list %}
-              <option value="{{ gas.key }}" data-volumes="{{ volume_labels[gas.key] }}"
-                      {% if gas.key == defaults.gas %}selected{% endif %}>{{ gas.name }}</option>
+              {% for item in gas_list %}
+              <option value="{{ item.key }}" data-volumes="{{ volume_labels[item.key] }}"
+                      {% if item.key == defaults.gas %}selected{% endif %}>{{ item.name }}</option>
               {% endfor %}
             </optgroup>
             {% endfor %}
           </select>
-          <small id="gas-volumes">{{ volume_labels[defaults.gas] }}</small>
         </label>
 
-        <label>Нужно юнитов сырого
-          <input type="number" name="n_units" id="n-units" value="{{ defaults.n_units }}" min="1" step="1" required>
+        <label class="field">
+          <span class="field__label">Нужно юнитов</span>
+          <input type="number" name="n_units" id="n-units" value="{{ defaults.n_units }}"
+                 min="1" step="1" required>
         </label>
 
-        <label>Тип структуры
+        <label class="field">
+          <span class="field__label">Структура</span>
           <select name="structure" id="structure-select">
             {% for structure, label in structure_labels.items() %}
             <option value="{{ structure.value }}"
@@ -83,59 +164,85 @@
           </select>
         </label>
 
-        <label>Навык Gas Decompression Efficiency
+        <label class="field">
+          <span class="field__label">Навык GDE</span>
           <select name="gde_level" id="gde-select">
             {% for level in gde_levels %}
             <option value="{{ level }}" {% if level == defaults.gde_level %}selected{% endif %}>{{ level }}</option>
             {% endfor %}
           </select>
-          <small>Разжатие: <strong id="eta-value" data-eta-map='{{ eta_map_json }}'>{{ initial_eta_pct }}</strong>%</small>
         </label>
 
-        <label>Брокерская комиссия, %
-          <input type="number" name="broker_fee" value="{{ defaults.broker_pct }}" min="0" max="5" step="any">
+        {# Процент разжатия считает ядро на сервере; полоска — та же величина
+           в ширину. Обе цифры двигает settings.js по карте из data-eta-map. #}
+        <div class="field field--eta">
+          <span class="field__label">Разжатие</span>
+          <div class="eta">
+            <span class="eta__value"><strong id="eta-value"
+              data-eta-map='{{ eta_map_json }}'>{{ initial_eta_pct }}</strong>%</span>
+            <span class="eta__track"><span class="eta__fill" id="eta-bar"
+              style="width: {{ initial_eta_pct }}%"></span></span>
+          </div>
+        </div>
+
+        <label class="field">
+          <span class="field__label">Брокер, %</span>
+          <input type="number" name="broker_fee" value="{{ defaults.broker_pct }}"
+                 min="0" max="5" step="any">
         </label>
 
-        <label>Обеспечение, % от стоимости газа
+        <label class="field">
+          <span class="field__label">Страховка, %</span>
           <input type="number" name="collateral_pct" value="{{ defaults.collateral_pct }}"
                  min="0" max="{{ defaults.collateral_pct_max }}" step="any">
-          <small>Надбавка к доставке: процент от стоимости газа в каждом сценарии,
-            без брокерской комиссии.</small>
         </label>
-      </div>
-      <button type="button" id="reset-settings">Сбросить настройки</button>
-    </fieldset>
 
-    {# --- Блок 2. Сетка цен 5×5 (SPEC §4) --- #}
-    <fieldset class="prices">
-      <legend>Цены по хабам</legend>
-      <p class="hint">Пустая ячейка — сценарий не участвует. Без ставки доставки хаб выпадает целиком.</p>
-      <p class="hint">Цены подставлены из базы и показаны приглушённо; ручной ввод их перебивает.
-        Собирает их отдельная задача по расписанию — из браузера в игровое API мы не ходим.
-        Ставки доставки задаёте только вы.</p>
+        <p class="params__note">Страховка — процент от стоимости газа, надбавка к доставке
+          в каждом сценарии, без брокерской комиссии.</p>
+
+        <div class="params__actions">
+          <button type="submit" class="calculate">Посчитать</button>
+        </div>
+      </div>
+
+      {# --- Блок 2. Сетка цен 5×5 (SPEC §4) --- #}
+      <div class="panel-head panel-head--prices">
+        <span class="panel-head__title">Цены по хабам</span>
+        <span class="panel-head__hint"><em>курсив</em> = из базы</span>
+      </div>
+
       {# Сетка пересчитывается под новую потребность: цена средневзвешенная по нужному
          объёму, а он меняется вместе с газом, количеством, структурой и навыком.
          На ввод в самих ячейках обработчик не вешается — затирал бы набранное. #}
       {# hx-target обязателен: форма задаёт #results, а потомки наследуют его —
          без своего target ответ с сеткой уехал бы в блок результата. #}
-      <div id="price-grid"
+      <div id="price-grid" class="price-grid-box"
            hx-post="/price-grid" hx-include="#calc-form"
            hx-target="this" hx-swap="innerHTML"
            hx-trigger="change from:#gas-select, change from:#n-units, change from:#structure-select, change from:#gde-select">
         {% include "partials/prices.html" %}
       </div>
-    </fieldset>
+    </aside>
 
-    <div class="actions">
-      <button type="submit" class="calculate">Посчитать</button>
-      {# Фильтр результата (SPEC §5.4): buy-ордер — заявка, а не покупка #}
-      <label class="filter"><input type="checkbox" name="sell_only" id="sell-only"{% if defaults.sell_only %} checked{% endif %}>
-        только sell</label>
-    </div>
+    <main class="main">
+      {# Панель фильтров липнет под шапкой. Работает пока один фильтр —
+         остальные из макета оставлены неактивными (SPEC §10.7). #}
+      <div class="filters">
+        <span class="filters__title">Результат</span>
+        {# Фильтр результата (SPEC §5.4): buy-ордер — заявка, а не покупка #}
+        <label><input type="checkbox" name="sell_only" id="sell-only"{% if defaults.sell_only %} checked{% endif %}>только sell</label>
+        <label class="pending" title="функционал ещё не сделан">
+          <input type="checkbox" disabled>только buy</label>
+        <label class="pending" title="функционал ещё не сделан">
+          <input type="checkbox" disabled>скрыть неликвид</label>
+        <label class="pending" title="функционал ещё не сделан">
+          <input type="checkbox" disabled>по одной строке на хаб</label>
+      </div>
+
+      {# --- Блок 3. Результат: заполняется HTMX-ответом POST /calculate --- #}
+      <div id="results"></div>
+    </main>
   </form>
-
-  {# --- Блок 3. Результат: заполняется HTMX-ответом POST /calculate --- #}
-  <div id="results"></div>
 
   <script src="{{ url_for('static', filename='htmx.min.js') }}"></script>
   <script src="{{ url_for('static', filename='settings.js') }}"></script>

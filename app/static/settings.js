@@ -4,6 +4,21 @@
   "use strict";
 
   var STORAGE_KEY = "gascalc.settings";
+  var THEME_KEY = "gascalc.theme";
+
+  /* Тема живёт отдельно от настроек расчёта: она про этот браузер, а не про
+     то, что считает человек. Первичное применение — в <head>, до отрисовки;
+     здесь только переключение (SPEC §10.3). */
+  var themeButton = document.getElementById("theme-toggle");
+  if (themeButton) {
+    themeButton.addEventListener("click", function () {
+      var root = document.documentElement;
+      var next = root.getAttribute("data-theme") === "light" ? "dark" : "light";
+      root.setAttribute("data-theme", next);
+      try { localStorage.setItem(THEME_KEY, next); } catch (e) { /* приватный режим */ }
+    });
+  }
+
   var form = document.getElementById("calc-form");
   if (!form) { return; }
 
@@ -55,8 +70,10 @@
     });
   }
 
-  /* «Разжатие: N%» — карта процентов посчитана на сервере тем же ядром. */
+  /* «Разжатие: N%» — карта процентов посчитана на сервере тем же ядром.
+     Полоска рядом показывает ту же величину, поэтому едет вместе с числом. */
   var etaValue = document.getElementById("eta-value");
+  var etaBar = document.getElementById("eta-bar");
   var etaMap = null;
   if (etaValue) {
     try { etaMap = JSON.parse(etaValue.getAttribute("data-eta-map")); } catch (e) { etaMap = null; }
@@ -65,16 +82,23 @@
     if (!etaMap || !etaValue) { return; }
     var byStructure = etaMap[getField("structure")];
     var pct = byStructure && byStructure[getField("gde_level")];
-    if (pct !== undefined) { etaValue.textContent = pct; }
+    if (pct === undefined) { return; }
+    etaValue.textContent = pct;
+    if (etaBar) { etaBar.style.width = pct + "%"; }
   }
 
-  /* «5 м³ сырой / 0.5 м³ сжатый» — строка готова на сервере, в data-volumes. */
+  /* «5 м³ сырой / 0.5 м³ сжатый» — строка готова на сервере, в data-volumes.
+     Имя газа и его объёмы стоят в шапке: она обязана говорить про то, что
+     выбрано сейчас, а не про то, с чем страница открылась. */
   var gasSelect = document.getElementById("gas-select");
   var gasVolumes = document.getElementById("gas-volumes");
+  var gasName = document.getElementById("header-gas");
   function updateVolumes() {
-    if (!gasSelect || !gasVolumes) { return; }
+    if (!gasSelect) { return; }
     var option = gasSelect.selectedOptions[0];
-    if (option) { gasVolumes.textContent = option.getAttribute("data-volumes"); }
+    if (!option) { return; }
+    if (gasVolumes) { gasVolumes.textContent = option.getAttribute("data-volumes"); }
+    if (gasName) { gasName.textContent = option.textContent.trim(); }
   }
 
   var resetButton = document.getElementById("reset-settings");

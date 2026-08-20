@@ -9,12 +9,12 @@ import json
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import date, timedelta
 
 from flask import Blueprint, current_app, render_template, request, session
 
 from app.core import calculator, catalog
-from app.core.constants import GDE_MAX_LEVEL, GDE_MIN_LEVEL
+from app.core.constants import GDE_MAX_LEVEL, GDE_MIN_LEVEL, PRICE_OUTLIER_FACTOR
 from app.core.models import (
     COLLATERAL_PCT_DEFAULT,
     COLLATERAL_PCT_MAX,
@@ -29,7 +29,13 @@ from app.core.models import (
     WarningCode,
 )
 from app.auth.views import current_character, settings_or_none
-from app.formatting import fmt_number
+from app.formatting import (
+    bar_width,
+    fmt_compact,
+    fmt_number,
+    fmt_share,
+    share_percents,
+)
 from app.db import utcnow
 from app.services import prices, user_settings
 
@@ -62,6 +68,28 @@ PRICE_COLUMNS: tuple[tuple[str, str], ...] = (
     ("compressed_sell", "Сжатый sell"),
     ("compressed_buy", "Сжатый buy"),
 )
+# Подписи формы в сетке и в таблице результата. Отдельно от FORM_LABELS:
+# там подписи идут внутри фразы («сжатый, buy»), здесь — заголовком колонки
+# и бейджем, и там макет говорит по-английски.
+GRID_FORM_LABELS = {
+    GasForm.RAW: "Сырой",
+    GasForm.COMPRESSED: "Compressed",
+}
+
+
+def price_groups() -> tuple[tuple[str, tuple[tuple[str, str], ...]], ...]:
+    """Ценовые колонки, сгруппированные по форме — для двухэтажной шапки сетки.
+
+    Считается из PRICE_COLUMNS, а не выписывается рядом: две независимые
+    таблицы разъедутся молча, и шапка начнёт врать про то, что под ней.
+    """
+    grouped: dict[GasForm, list[tuple[str, str]]] = {}
+    for suffix, _label in PRICE_COLUMNS:
+        form_value, side_value = suffix.rsplit("_", 1)
+        grouped.setdefault(GasForm(form_value), []).append((suffix, side_value))
+    return tuple(
+        (GRID_FORM_LABELS[form], tuple(columns)) for form, columns in grouped.items()
+    )
 
 # Значения по умолчанию — SPEC §3
 DEFAULTS = {
@@ -258,6 +286,23 @@ def _history_rows(gas: Gas, scenarios: Sequence[object]) -> dict[str, dict[str, 
     return rows
 
 
+def _history_last_day(gas: Gas) -> date | None:
+    """Последний день истории сделок по этому газу — для чипа в шапке.
+
+    Тот же свод, что показывает таблица результата, но нужен он уже при
+    открытии страницы: чип «история ДД.ММ.ГГГГ» стоит в шапке, а не в ответе
+    /calculate. Недоступная база здесь молчит — как и везде, где история
+    вспомогательная: чип просто не рисуется.
+    """
+    stats = prices.load_history_stats(
+        current_app.extensions["db_engine"], catalog.hubs(), _known_type_ids(gas)
+    )
+    return max(
+        (value.last_day for value in stats.values() if value.last_day is not None),
+        default=None,
+    )
+
+
 def _grid_notes(gas: Gas, book: prices.PriceBook) -> list[str]:
     """Что сказать пользователю про происхождение и свежесть цен.
 
@@ -388,6 +433,7 @@ def _render_grid(grid: list[HubRow], notes: list[str]) -> str:
         "partials/prices.html",
         grid=grid,
         price_columns=PRICE_COLUMNS,
+        price_groups=price_groups(),
         grid_notes=notes or None,
     )
 
@@ -414,6 +460,167 @@ def _for_template(saved: Mapping[str, str]) -> dict[str, object]:
         values["broker_pct"] = fee
 
     return values
+
+# --- Подготовка чисел для шаблона (SPEC §10.3) ---
+#
+# Всё, что в макете написано в style="…" и зависит от данных — ширина полоски,
+# цвет по порогу, доли в раскладке стоимости — считается здесь. В шаблоне
+# арифметики быть не должно: там её не видно и не проверить тестом.
+
+# Порог отставания от лучшего, за которым Δ красится тревожным цветом, %
+DELTA_WARN_PCT = 8.0
+DELTA_BAD_PCT = 25.0
+# Ниже этой доли размаха ISK/юнит строка ещё читается как «рядом с лучшей»
+ISK_NEAR_SHARE = 0.35
+# Полоска ISK/юнит: лучшая строка во всю ширину, худшая — в остаток
+ISK_BAR_MIN_PCT = 6.0
+ISK_BAR_SPAN_PCT = 76.0
+# Огрызок полоски ликвидности: нулевая ширина читалась бы как «данных нет»
+LIQ_BAR_MIN_PCT = 4.0
+
+
+def scenario_slots() -> int:
+    """Сколько строк вообще могло получиться: хабы × ценовые колонки.
+
+    Знаменатель карточки «Сценариев в расчёте». Константы здесь быть не может:
+    шестой хаб появится — двадцатка соврёт, и никто этого не заметит.
+    """
+    return len(catalog.hubs()) * len(PRICE_COLUMNS)
+
+
+def _low_volume_notes(scenario, history: Mapping[str, object] | None) -> list[str]:
+    """Расшифровка пометки «маленький оборот» — по одной фразе на причину.
+
+    Причин три, и они про разное: недельный оборот, суточный оборот и глубина
+    стакана. Склеивать их в одну формулировку нельзя — человек не поймёт,
+    ждать ему несколько дней или искать другой хаб.
+    """
+    notes: list[str] = []
+    if history is not None and history["short_of_volume"]:
+        notes.append(
+            f"За неделю в регионе продано {fmt_compact(history['window_volume'])} юнитов — "
+            f"меньше, чем нужно ({fmt_number(scenario.qty)}). Столько не набрать."
+        )
+    elif history is not None and history["slow_for_volume"]:
+        notes.append(
+            f"В сутки в регионе продают {fmt_compact(history['daily_volume'])} юнитов, "
+            f"а нужно {fmt_number(scenario.qty)} — набирать придётся несколько дней."
+        )
+    if WarningCode.SHALLOW_BOOK in scenario.warnings and scenario.available_qty is not None:
+        notes.append(
+            f"В стакане сейчас {fmt_number(scenario.available_qty)} юнитов из "
+            f"{fmt_number(scenario.qty)} — остальное придётся добирать дороже "
+            f"или в другом хабе."
+        )
+    return notes
+
+
+def _row_view(
+    scenario,
+    index: int,
+    history: Mapping[str, object] | None,
+    isk_span: tuple[float, float],
+    max_daily: float,
+) -> dict[str, object]:
+    """Одна строка таблицы результата в том виде, в каком её рисует шаблон."""
+    min_isk, max_isk = isk_span
+    spread = max_isk - min_isk
+    is_best = index == 0
+    # Доля строки в размахе ISK/юнит: 0 у лучшей, 1 у худшей
+    rel = (scenario.isk_per_unit - min_isk) / spread if spread > 0 else 0.0
+
+    # Стоимость газа с брокерской комиссией: то, что осталось от итога
+    # за вычетом обеих частей доставки (DOMAIN §3)
+    gas_cost = scenario.total - scenario.freight_volume - scenario.collateral_fee
+    gas_pct, freight_pct, coll_pct = share_percents(
+        (gas_cost, scenario.freight_volume, scenario.collateral_fee), scenario.total
+    )
+
+    low_volume = _low_volume_notes(scenario, history)
+    unconfirmed = bool(history is not None and history["unconfirmed"])
+    outlier = WarningCode.PRICE_OUTLIER in scenario.warnings
+
+    if history is not None and history["short_of_volume"]:
+        liquidity_tone, liquidity_note = "bad", "столько не набрать"
+    elif history is not None and history["slow_for_volume"]:
+        liquidity_tone, liquidity_note = "warn", "набирать несколько дней"
+    else:
+        # Глубина стакана — не про оборот, и её число стоит в колонке «Купить».
+        # Дублировать его здесь значит сказать одно и то же двумя цифрами.
+        liquidity_tone, liquidity_note = "ok", ""
+
+    if scenario.delta_pct is None:
+        delta_tone = "muted"
+    elif scenario.delta_pct > DELTA_BAD_PCT:
+        delta_tone = "bad"
+    elif scenario.delta_pct > DELTA_WARN_PCT:
+        delta_tone = "warn"
+    else:
+        delta_tone = "plain"
+
+    return {
+        "scenario": scenario,
+        "rank": index + 1,
+        "is_best": is_best,
+        "is_odd": index % 2 == 1,
+        "history": history,
+        # Полоска ISK/юнит: чем дешевле, тем длиннее — лучшая строка самая длинная
+        "isk_bar": bar_width(100.0 - rel * ISK_BAR_SPAN_PCT, floor=ISK_BAR_MIN_PCT),
+        "isk_tone": "best" if is_best else ("near" if rel < ISK_NEAR_SHARE else "far"),
+        "delta_tone": delta_tone,
+        "gas_cost": gas_cost,
+        "gas_pct": gas_pct,
+        "freight_pct": freight_pct,
+        "collateral_pct": coll_pct,
+        "stack_label": (
+            f"газ {fmt_share(gas_pct)}% · доставка {fmt_share(freight_pct)}%"
+            f" · страховка {fmt_share(coll_pct)}%"
+        ),
+        "liquidity_bar": bar_width(
+            (history["daily_volume"] / max_daily * 100) if history and max_daily else 0.0,
+            floor=LIQ_BAR_MIN_PCT,
+        ),
+        "liquidity_tone": liquidity_tone,
+        "liquidity_note": liquidity_note,
+        # Три значка макета поверх пяти внутренних пометок (ROADMAP 12.5)
+        "flag_no_trades": unconfirmed,
+        "flag_anomaly": outlier,
+        "flag_low_volume": bool(low_volume),
+        "title_no_trades": (
+            "Сделок по такой цене не было: за неделю по ней не торговали — "
+            "ордер, скорее всего, не исполнится."
+            if unconfirmed
+            else ""
+        ),
+        "title_anomaly": (
+            f"Аномальная цена: отличается от медианы по остальным хабам больше чем "
+            f"в {fmt_number(PRICE_OUTLIER_FACTOR)} раза. Проверьте, не опечатка ли."
+            if outlier
+            else ""
+        ),
+        "title_low_volume": " ".join(low_volume),
+    }
+
+
+def _row_views(
+    scenarios: Sequence[object], history_rows: Mapping[str, Mapping[str, object]]
+) -> list[dict[str, object]]:
+    """Таблица результата целиком: ширины полосок считаются от общего размаха."""
+    if not scenarios:
+        return []
+    # Сценарии уже отсортированы по ISK/юнит по возрастанию (calculator)
+    isk_span = (scenarios[0].isk_per_unit, scenarios[-1].isk_per_unit)
+    matched = [
+        history_rows.get(_history_row_key(s.hub_key, s.form, s.side)) for s in scenarios
+    ]
+    max_daily = max(
+        (float(row["daily_volume"]) for row in matched if row is not None), default=0.0
+    )
+    return [
+        _row_view(scenario, index, history, isk_span, max_daily)
+        for index, (scenario, history) in enumerate(zip(scenarios, matched))
+    ]
+
 
 @bp.get("/")
 def index() -> str:
@@ -446,10 +653,18 @@ def index() -> str:
         gas, int(values["n_units"]), structure, int(values["gde_level"])
     )
     book = _load_book(gas, needed)
+    age = book.age()
 
     return render_template(
         "index.html",
         character=who,
+        gas=gas,
+        # Чипы состояния данных в шапке. Возраст цен и дата истории живут
+        # и в заметках сетки, и в сносках результата, но шапке нужны сами
+        # значения, а не предложения вокруг них (ROADMAP 12.2)
+        price_age=_humanize_age(age) if age is not None else None,
+        history_day=_history_last_day(gas),
+        scenario_slots=scenario_slots(),
         sso_enabled=settings_or_none() is not None,
         offer_import=session.pop("offer_settings_import", False),
         gases_by_family=gases_by_family,
@@ -458,6 +673,7 @@ def index() -> str:
         gde_levels=range(GDE_MIN_LEVEL, GDE_MAX_LEVEL + 1),
         hubs=catalog.hubs(),
         price_columns=PRICE_COLUMNS,
+        price_groups=price_groups(),
         grid=_build_grid({f"{key}_rate": rate for key, rate in saved.freight_rates.items()}, book),
         grid_notes=_grid_notes(gas, book) or None,
         defaults=values,
@@ -638,13 +854,17 @@ def calculate() -> str:
     """Принимает форму, возвращает HTML-фрагмент блока результата (HTMX)."""
     inp, prices, errors = _parse_form(request.form)
     if errors:
-        return render_template("partials/results.html", errors=errors)
+        return render_template(
+            "partials/results.html", errors=errors, scenario_slots=scenario_slots()
+        )
 
     try:
         result = calculator.build_scenarios(inp, prices)
     except ValueError as exc:
         # Подстраховка: ядро валидирует жёстче формы. Ошибку показываем, не глотаем.
-        return render_template("partials/results.html", errors=[str(exc)])
+        return render_template(
+            "partials/results.html", errors=[str(exc)], scenario_slots=scenario_slots()
+        )
 
     history_rows = _history_rows(inp.gas, result.scenarios)
     return render_template(
@@ -652,8 +872,11 @@ def calculate() -> str:
         errors=None,
         result=result,
         inp=inp,
+        rows=_row_views(result.scenarios, history_rows),
+        scenario_slots=scenario_slots(),
         hub_names={hub.key: hub.name for hub in catalog.hubs()},
         form_labels=FORM_LABELS,
+        grid_form_labels=GRID_FORM_LABELS,
         has_outliers=any(
             WarningCode.PRICE_OUTLIER in scenario.warnings
             for scenario in result.scenarios

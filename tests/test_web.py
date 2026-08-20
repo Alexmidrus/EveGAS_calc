@@ -323,3 +323,111 @@ class TestValidation:
         response = client.post("/calculate", data=form)
         assert response.status_code == 200
         assert "Неизвестный газ" in response.get_data(as_text=True)
+
+
+class TestTerminalLayout:
+    """Оформление «GasLens Terminal» (SPEC §10, этап 12).
+
+    Проверяются не классы и не теги, а то, что человек видит и на что жмёт:
+    какая тема включается сама, откуда берётся знаменатель «из N», сходятся ли
+    доли в полоске и честно ли выключены элементы без функционала.
+    """
+
+    def test_dark_theme_is_default(self, client):
+        """Тёмная тема — по умолчанию, и она стоит в разметке до всякого JS."""
+        html = client.get("/").get_data(as_text=True)
+        assert 'data-theme="dark"' in html
+
+    def test_theme_applied_before_first_paint(self, client):
+        """Выбор темы читается из localStorage в <head>, а не после отрисовки:
+        иначе тёмная страница мигает светлой."""
+        html = client.get("/").get_data(as_text=True)
+        head = html[: html.index("</head>")]
+        assert "gascalc.theme" in head
+        assert 'id="theme-toggle"' in html
+
+    def test_scenario_denominator_counts_hubs_and_columns(self, client):
+        """«N из 20» — не константа: знаменатель считается от числа хабов
+        и ценовых колонок. Появится шестой хаб — двадцатка соврёт."""
+        from app.core import catalog
+        from app.routes import PRICE_COLUMNS, scenario_slots
+
+        expected = len(catalog.hubs()) * len(PRICE_COLUMNS)
+        assert scenario_slots() == expected
+
+        html = client.post("/calculate", data=CONTROL_FORM).get_data(as_text=True)
+        assert f"из {expected}" in html
+
+    def test_cost_shares_add_up_to_hundred(self, client):
+        """Доли в полоске «из чего сложилось» дают ровно 100 %.
+
+        Три независимо округлённые доли дали бы 99.9 % — щель на конце полоски.
+        """
+        import re
+
+        html = client.post("/calculate", data=CONTROL_FORM).get_data(as_text=True)
+        stacks = re.findall(r'<div class="stack">(.*?)</div>', html, re.S)
+        assert stacks, "полоска «из чего сложилось» не отрисована"
+        for stack in stacks:
+            shares = [float(value) for value in re.findall(r"width: ([\d.]+)%", stack)]
+            assert len(shares) == 3
+            assert sum(shares) == pytest.approx(100.0)
+
+    def test_pending_elements_are_disabled_and_honest(self, client):
+        """Элементы из макета, к которым ещё нет функционала, остаются на экране,
+        но не притворяются рабочими (SPEC §10.7)."""
+        html = client.get("/").get_data(as_text=True)
+        assert html.count('title="функционал ещё не сделан"') >= 5
+        # Три нерабочих фильтра из четырёх: работает только «только sell»
+        assert html.count("<input type=\"checkbox\" disabled>") == 3
+        assert 'name="sell_only"' in html
+
+    def test_header_shows_current_gas_and_data_age(self, client):
+        """Шапка говорит, про какой газ идёт расчёт и насколько свежи данные."""
+        html = client.get("/").get_data(as_text=True)
+        assert 'id="header-gas"' in html
+        assert "Fullerite-C320" in html
+        # Цен в тестовой базе нет — молчать об этом нельзя
+        assert "цены не собраны" in html or "цены " in html
+
+    def test_form_contract_survives_the_redesign(self, client):
+        """Имена полей не поехали: на них держатся _parse_form, _build_grid
+        и настройки, сохранённые в localStorage прежней версией."""
+        html = client.get("/").get_data(as_text=True)
+        for name in (
+            "gas", "n_units", "structure", "gde_level", "broker_fee",
+            "collateral_pct", "sell_only", "jita_rate", "jita_compressed_sell",
+            "jita_compressed_sell_auto", "jita_compressed_sell_depth",
+        ):
+            assert f'name="{name}"' in html, f"поле {name} исчезло из формы"
+
+
+class TestViewMath:
+    """Числа, которые считает сервер вместо шаблона (SPEC §10.3)."""
+
+    def test_share_percents_sum_to_hundred(self):
+        from app.formatting import share_percents
+
+        assert sum(share_percents((1, 1, 1), 3)) == 100.0
+        assert sum(share_percents((999, 0.5, 0.5), 1000)) == 100.0
+
+    def test_share_percents_without_total(self):
+        """Делить не на что — нули, а не деление на ноль и не выдуманные доли."""
+        from app.formatting import share_percents
+
+        assert share_percents((0, 0, 0), 0) == [0.0, 0.0, 0.0]
+
+    def test_bar_width_is_clamped(self):
+        from app.formatting import bar_width
+
+        assert bar_width(140) == "100%"
+        assert bar_width(-10) == "0%"
+        assert bar_width(2, floor=6) == "6%"
+
+    def test_share_label_never_says_zero_for_a_real_cost(self):
+        """Полпроцента от стоимости газа — это миллионы ISK. «0 %» их сотрёт."""
+        from app.formatting import fmt_share
+
+        assert fmt_share(0.5) == "<1"
+        assert fmt_share(0) == "0"
+        assert fmt_share(14.3) == "14"

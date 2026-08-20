@@ -460,7 +460,9 @@ class TestHistoryInResults:
     def test_columns_show_real_trades(self, client, engine):
         add_history(engine, "jita", GasForm.RAW, average=3000.0, volume=700_000)
         html = client.post("/calculate", data=self.form_with_price("3000")).get_data(as_text=True)
-        assert "Сделки" in html and "Продано/сут" in html
+        # Колонка суточного оборота с версии 0.3.0 называется «Ликвидность»,
+        # а само число стоит в ней подписью «N/сут» (ROADMAP 12.5)
+        assert "Сделки" in html and "Ликвидность" in html and "/сут" in html
         assert "2 940" in html and "3 060" in html  # диапазон сделок ±2%
 
     def test_illiquid_price_is_flagged(self, client, engine):
@@ -468,7 +470,9 @@ class TestHistoryInResults:
         add_history(engine, "jita", GasForm.RAW, average=6000.0)
         html = client.post("/calculate", data=self.form_with_price("1")).get_data(as_text=True)
         assert "Неликвидная цена" in html
-        assert "сделок по вашей цене не было" in html
+        # Пометка переехала из подписи под ценой в значок у имени хаба;
+        # текст, объясняющий её, живёт в подсказке значка (ROADMAP 12.5)
+        assert "Сделок по такой цене не было" in html
 
     def test_normal_price_is_not_flagged(self, client, engine):
         """Нормальный спред пометки не даёт — иначе она превратится в шум."""

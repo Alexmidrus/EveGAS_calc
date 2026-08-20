@@ -1,21 +1,43 @@
-{# Блок 2: сетка цен 5×5 (SPEC §4). Отдаётся при GET / и при POST /price-grid. #}
+{# Блок 2: сетка цен 5×5 (SPEC §4). Отдаётся при GET / и при POST /price-grid.
+
+   Имена полей менять нельзя: на {hub}_rate, {hub}_{suffix} и на скрытых
+   {suffix}_auto / {suffix}_depth держатся _parse_form, _build_grid и снятие
+   пометки «из базы» в settings.js. Вёрстка вокруг них — любая. #}
 <table class="price-grid">
+  <colgroup>
+    <col class="col-hub"><col class="col-rate">
+    {% for suffix, label in price_columns %}<col>{% endfor %}
+  </colgroup>
   <thead>
     <tr>
       <th>Хаб</th>
-      <th>Доставка, ISK/м³</th>
-      {% for suffix, label in price_columns %}<th>{{ label }}</th>{% endfor %}
+      <th class="num">ISK/м³</th>
+      {% for group_label, columns in price_groups %}
+      <th colspan="{{ columns|length }}"
+          class="price-grid__group price-grid__group--{{ 'compressed' if loop.last else 'raw' }}">{{ group_label }}</th>
+      {% endfor %}
+    </tr>
+    <tr>
+      <th colspan="2"></th>
+      {% for group_label, columns in price_groups %}
+      {% for suffix, side_label in columns %}
+      <th class="price-grid__side price-grid__side--{{ side_label }}{{ ' price-grid__side--first' if loop.first }}">{{ side_label }}</th>
+      {% endfor %}
+      {% endfor %}
     </tr>
   </thead>
   <tbody>
     {% for row in grid %}
     <tr>
-      <th>{{ row.hub.name }}</th>
-      <td><input type="text" inputmode="decimal" name="{{ row.hub.key }}_rate" value="{{ row.rate }}"></td>
+      <td class="price-grid__hub">{{ row.hub.name }}</td>
+      <td class="price-grid__rate"><input type="text" inputmode="decimal" placeholder="—"
+             aria-label="{{ row.hub.name }}: доставка, ISK/м³"
+             name="{{ row.hub.key }}_rate" value="{{ row.rate }}"></td>
       {% for suffix, label in price_columns %}
       {% set cell = row.cells[suffix] %}
       <td>
-        <input type="text" inputmode="decimal" data-price-cell
+        <input type="text" inputmode="decimal" data-price-cell placeholder="—"
+               aria-label="{{ row.hub.name }}: {{ label }}"
                name="{{ row.hub.key }}_{{ suffix }}"
                value="{{ cell.value }}"
                {% if cell.auto %}class="fetched" title="Из базы, можно перебить"{% endif %}>
@@ -33,6 +55,13 @@
   </tbody>
 </table>
 
+<p class="footnote">Пустая ячейка — сценарий не участвует. Без ставки доставки хаб
+  выпадает целиком. Цены подставлены из базы и показаны курсивом; ручной ввод их
+  перебивает. Собирает их отдельная задача по расписанию — из браузера в игровое
+  API мы не ходим. Ставки доставки задаёте только вы.</p>
+
+{# Заметок в макете нет, но это дыра макета, а не разрешение молчать: пустая
+   база, устаревшие данные и хаб без среза выглядят на экране одинаково. #}
 {% if grid_notes %}
 <ul class="notes">
   {% for note in grid_notes %}<li>{{ note }}</li>{% endfor %}

@@ -1,138 +1,1046 @@
-/* Минимальное оформление (SPEC §10): системный шрифт, таблицы с рамками,
-   две подсветки. Дизайн — отдельная задача после того, как логика заработает. */
+/* Оформление «GasLens Terminal» (SPEC §10).
 
-:root { color-scheme: only light; } /* цвета в файле светлые; тёмная тема — задача этапа дизайна */
+   Один файл, написанный руками: ни фреймворка, ни сборщика, ни препроцессора.
+   Никаких внешних запросов — шрифты лежат своими файлами рядом, страница
+   обязана открываться без интернета.
+
+   Цвета — только переменными из §10.3. Значения взяты из макета один в один;
+   подбирать их на глаз нельзя, иначе тёмная и светлая тема разъедутся. */
+
+/* --- Шрифты (SPEC §10.4) ---
+   Оба под SIL OFL и лежат в app/static/fonts/ своими файлами: ни одного
+   внешнего запроса в рантайме, страница открывается без интернета.
+
+   Файлы вариативные — один на подмножество символов обслуживает все
+   начертания, поэтому их шесть, а не пятнадцать. Отсюда font-weight
+   диапазоном: браузер интерполирует 400, 600 и 700 из того же файла.
+
+   unicode-range режет загрузку по алфавитам: латиница качается всегда,
+   кириллица JetBrains Mono — только когда на странице есть кириллица.
+
+   У Archivo кириллицы нет вовсе — ни в одном подмножестве Google Fonts.
+   Русский текст поэтому падает на system-ui, и это видно на экране.
+   Запасные семейства обязательны не только на случай сбоя загрузки. */
+
+
+/* Archivo · latin */
+@font-face {
+  font-family: "Archivo";
+  src: url("fonts/archivo-latin.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/* Archivo · latin-ext */
+@font-face {
+  font-family: "Archivo";
+  src: url("fonts/archivo-latin-ext.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+/* JetBrains Mono · latin */
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("fonts/jetbrains-mono-latin.woff2") format("woff2");
+  font-weight: 100 800;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/* JetBrains Mono · latin-ext */
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("fonts/jetbrains-mono-latin-ext.woff2") format("woff2");
+  font-weight: 100 800;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+/* JetBrains Mono · cyrillic */
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("fonts/jetbrains-mono-cyrillic.woff2") format("woff2");
+  font-weight: 100 800;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+
+/* JetBrains Mono · cyrillic-ext */
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("fonts/jetbrains-mono-cyrillic-ext.woff2") format("woff2");
+  font-weight: 100 800;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+
+/* --- Токены (SPEC §10.3) --- */
+
+:root {
+  --bg: #0a0c0f;
+  --panel: #10141a;
+  --panel2: #161b23;
+  --line: #242b37;
+  --lineSoft: #1b212a;
+  --fg: #eef1f6;
+  --fg2: #b9c3d1;
+  --fg3: #8b95a4;
+  --input: #0c1015;
+  --rawFg: #7fd8b8;
+  --rawBg: rgba(79, 191, 139, 0.16);
+  --rawLine: rgba(79, 191, 139, 0.42);
+  --compFg: #b0a4ff;
+  --compBg: rgba(140, 125, 240, 0.18);
+  --compLine: rgba(140, 125, 240, 0.45);
+  --sellFg: #0a0c0f;
+  --sellBg: #57b7d9;
+  --buyFg: #e8a24d;
+  --buyLine: rgba(232, 162, 77, 0.6);
+  --gold: #e3b341;
+  --cyan: #57b7d9;
+  --green: #4fbf8b;
+  --amber: #e0954a;
+  --red: #e05c48;
+  --bestBg: rgba(227, 179, 65, 0.08);
+  --rowAlt: rgba(255, 255, 255, 0.014);
+  --hover: rgba(87, 183, 217, 0.07);
+  /* Подложки значков-пометок: цвет тот же, что у акцента, но полупрозрачный */
+  --redBg: rgba(224, 92, 72, 0.14);
+  --redLine: rgba(224, 92, 72, 0.45);
+  --amberBg: rgba(224, 149, 74, 0.14);
+  --amberLine: rgba(224, 149, 74, 0.45);
+  --greenBg: rgba(79, 191, 139, 0.12);
+  --greenLine: rgba(79, 191, 139, 0.4);
+  /* Тёмная тема — по умолчанию: браузер обязан знать это про поля ввода
+     и полосы прокрутки, иначе они останутся светлыми посреди тёмной страницы */
+  color-scheme: dark;
+
+  --font-text: "Archivo", system-ui, sans-serif;
+  --font-num: "JetBrains Mono", ui-monospace, monospace;
+  --head-height: 48px;
+  --side-width: 336px;
+}
+
+[data-theme="light"] {
+  --bg: #f4f5f7;
+  --panel: #ffffff;
+  --panel2: #eef0f4;
+  --line: #d7dbe2;
+  --lineSoft: #e7eaef;
+  --fg: #0e1218;
+  --fg2: #46505e;
+  --fg3: #6d7683;
+  --input: #ffffff;
+  --rawFg: #0c6047;
+  --rawBg: rgba(12, 96, 71, 0.11);
+  --rawLine: rgba(12, 96, 71, 0.35);
+  --compFg: #4033a8;
+  --compBg: rgba(64, 51, 168, 0.1);
+  --compLine: rgba(64, 51, 168, 0.34);
+  --sellFg: #ffffff;
+  --sellBg: #1a7c9c;
+  --buyFg: #8a4b06;
+  --buyLine: rgba(138, 75, 6, 0.55);
+  --gold: #9a6d0a;
+  --cyan: #1a7c9c;
+  --green: #147a4f;
+  --amber: #a05a10;
+  --red: #b3341f;
+  --bestBg: rgba(154, 109, 10, 0.1);
+  --rowAlt: rgba(0, 0, 0, 0.018);
+  --hover: rgba(26, 124, 156, 0.08);
+  --redBg: rgba(179, 52, 31, 0.1);
+  --redLine: rgba(179, 52, 31, 0.4);
+  --amberBg: rgba(160, 90, 16, 0.1);
+  --amberLine: rgba(160, 90, 16, 0.4);
+  --greenBg: rgba(20, 122, 79, 0.1);
+  --greenLine: rgba(20, 122, 79, 0.35);
+  color-scheme: light;
+}
+
+/* --- База --- */
+
+* { box-sizing: border-box; }
+
+html,
+body { margin: 0; padding: 0; }
 
 body {
-  font-family: system-ui, sans-serif;
-  margin: 1.5rem auto;
-  max-width: 72rem;
-  padding: 0 1rem;
-  color: #1a1a1a;
-  background: #fff;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-text);
+  font-size: 14px;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
 }
 
-h1 { margin-bottom: 0.25rem; }
-.tagline { color: #555; margin-top: 0; }
+a { color: var(--cyan); text-decoration: none; }
+a:hover { color: var(--fg); text-decoration: underline; }
 
-/* --- Форма --- */
+input,
+select,
+button { font: inherit; color: inherit; }
 
-fieldset {
-  border: 1px solid #ccc;
-  margin-bottom: 1rem;
-  padding: 0.75rem 1rem;
+input::placeholder { color: var(--fg3); }
+
+/* Числа выравниваются по разрядам — иначе колонку цен не прочитать (SPEC §10.4) */
+.num,
+.mono {
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
 }
-legend { font-weight: 600; padding: 0 0.4rem; }
 
-.params-grid {
+/* Элемент, к которому ещё нет функционала (SPEC §10.7). Он остаётся на экране,
+   но не притворяется рабочим: приглушён, не нажимается, с честной подсказкой. */
+.pending,
+.pending input,
+button.pending,
+input.pending {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* --- Шапка (SPEC §10.5) --- */
+
+.topbar {
   display: flex;
-  flex-wrap: wrap;
-  gap: 1rem 2rem;
-  align-items: flex-start;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 14px;
+  height: var(--head-height);
+  padding: 0 16px;
+  overflow: hidden;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  z-index: 20;
 }
-.params-grid > label { display: flex; flex-direction: column; gap: 0.25rem; }
-.params-grid small { color: #555; }
 
-.collateral { margin: 0; }
-.collateral label { display: block; margin: 0.25rem 0; }
-.collateral input[type="text"] { width: 11em; }
+.brand {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  flex: none;
+  white-space: nowrap;
+}
+.brand__name { font-size: 16px; font-weight: 700; letter-spacing: -0.2px; }
+.brand__by {
+  font-size: 11px;
+  color: var(--fg3);
+  text-transform: uppercase;
+  letter-spacing: 0.9px;
+}
 
-input[type="number"] { width: 9em; }
-input, select { font: inherit; padding: 0.2rem 0.35rem; }
-input:disabled { background: #eee; color: #888; }
+.topbar__sep {
+  width: 1px;
+  height: 20px;
+  background: var(--line);
+  flex: none;
+}
 
-.hint { color: #555; margin: 0.25rem 0 0.5rem; }
+.topbar__spacer { flex: 1 1 auto; min-width: 8px; }
 
-button {
-  font: inherit;
-  padding: 0.35rem 1rem;
+.gas-chip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  font-family: var(--font-num);
+}
+.gas-chip__name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--gold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.gas-chip__volumes { font-size: 12px; color: var(--fg3); }
+
+.chip {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  padding: 4px 9px;
+  border: 1px solid var(--lineSoft);
+  border-radius: 3px;
+  background: var(--panel2);
+  font-size: 11.5px;
+  color: var(--fg2);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+}
+.chip--fixed { flex: none; }
+.chip__dim { color: var(--fg3); }
+.chip__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--fg3);
+  flex: none;
+}
+
+.toggle-group {
+  display: flex;
+  align-items: center;
+  flex: none;
+  padding: 2px;
+  gap: 2px;
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+}
+.toggle-group button {
+  background: transparent;
+  border: none;
+  border-radius: 2px;
+  padding: 3px 8px;
+  font-family: var(--font-num);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.6px;
+  color: var(--fg3);
   cursor: pointer;
 }
-button.calculate { font-weight: 600; padding: 0.5rem 2rem; }
-#reset-settings { margin-top: 0.75rem; }
+.toggle-group button[aria-pressed="true"] { background: var(--input); color: var(--fg); }
 
-.actions { display: flex; align-items: center; gap: 1rem; }
-.filter { color: #333; }
-
-/* --- Таблицы --- */
-
-table { border-collapse: collapse; }
-th, td { border: 1px solid #bbb; padding: 0.3rem 0.55rem; text-align: left; }
-thead th { background: #f2f2f2; }
-
-.price-grid input {
-  width: 7.5em;
-  border: none;
-  text-align: right;
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 28px;
+  height: 26px;
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  color: var(--fg2);
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s;
 }
-.price-grid td { padding: 0; }
-.price-grid input:focus { outline: 2px solid #4a90d9; }
-/* Подтянутое из ESI — приглушённо: это черновик, ручной ввод главнее (SPEC §4) */
-.price-grid input.fetched { color: #767676; font-style: italic; }
+.icon-button:hover { border-color: var(--cyan); color: var(--fg); }
 
-button.fetch { margin-bottom: 0.5rem; }
-.indicator { color: #555; margin-left: 0.5rem; display: none; }
-.indicator.htmx-request { display: inline; }
+/* Показывается тот значок, которого сейчас нет на экране: в тёмной теме
+   солнце, в светлой — луна. Иначе кнопка обещает то, что уже включено. */
+.theme-toggle .icon-sun { display: inline; }
+.theme-toggle .icon-moon { display: none; }
+[data-theme="light"] .theme-toggle .icon-sun { display: none; }
+[data-theme="light"] .theme-toggle .icon-moon { display: inline; }
 
-.footnote { color: #666; font-size: 0.85em; margin: 0.5rem 0 0; }
-/* Подпись бренда рядом с названием */
-h1 small.by { font-size: 0.5em; font-weight: 400; color: #666; }
-small.shallow { display: block; color: #a05a00; font-weight: 400; }
-/* Диапазон реальных сделок под опорной ценой (ESI §5.5) */
-small.range { display: block; color: #666; font-weight: 400; }
-/* Неликвид: по этой цене сделок не было */
-small.illiquid { display: block; color: #9c1f1f; font-weight: 400; }
+.account {
+  display: flex;
+  align-items: center;
+  flex: none;
+  gap: 9px;
+  white-space: nowrap;
+}
+.account form { display: contents; }
+.account__avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: var(--panel2);
+  font-family: var(--font-num);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--fg3);
+  flex: none;
+}
+.account__who { font-family: var(--font-num); font-size: 12.5px; color: var(--fg2); }
+.account__hint { font-size: 11px; color: var(--fg3); text-transform: none; }
+.account button,
+.account .login {
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 4px 9px;
+  font-size: 12px;
+  color: var(--fg3);
+  cursor: pointer;
+}
+.account button:hover,
+.account .login:hover {
+  color: var(--fg);
+  border-color: var(--fg3);
+  text-decoration: none;
+}
 
-.results-table { margin-top: 0.5rem; }
-.results-table .num, td.num, th.num { text-align: right; white-space: nowrap; }
-.results-table tr.best { background: #e6f4e6; font-weight: 600; }
-.results-table tr.warn td:first-child { color: #a05a00; }
+/* --- Флеш-сообщения и предложение переноса настроек (ROADMAP 12.7) --- */
 
-/* --- Результат --- */
+.flash { list-style: none; padding: 0; margin: 0; }
+.flash li {
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--line);
+  border-left: 3px solid var(--fg3);
+  background: var(--panel);
+  font-size: 13px;
+}
+.flash li.ok { border-left-color: var(--green); color: var(--green); }
+.flash li.error { border-left-color: var(--red); color: var(--red); }
+
+.import-offer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 16px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  box-shadow: inset 3px 0 0 var(--cyan);
+  font-size: 13px;
+}
+.import-offer button {
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: var(--fg2);
+  cursor: pointer;
+}
+.import-offer button:hover { color: var(--fg); border-color: var(--cyan); }
+
+/* --- Полоса итогов (SPEC §10.5) --- */
 
 .summary {
+  display: grid;
+  grid-template-columns: 1.5fr 1fr 1fr 1fr;
+  gap: 1px;
+  background: var(--line);
+  border-bottom: 1px solid var(--line);
+}
+.summary:empty { display: none; }
+
+.summary__card {
+  background: var(--panel);
+  padding: 12px 16px 13px;
   display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.summary__card--best { box-shadow: inset 2px 0 0 var(--gold); }
+.summary__label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--fg3);
+}
+.summary__value {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  white-space: nowrap;
+}
+.summary__big {
+  font-family: var(--font-num);
+  font-size: 23px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+.summary__card--best .summary__big {
+  font-size: 29px;
+  color: var(--gold);
+  letter-spacing: -0.5px;
+  line-height: 1.05;
+}
+.summary__big--savings { color: var(--green); }
+.summary__big--loss { color: var(--amber); }
+.summary__unit { font-size: 12px; color: var(--fg2); }
+.summary__where { font-size: 13px; color: var(--fg); font-weight: 500; }
+.summary__note { font-size: 12px; color: var(--fg3); }
+
+/* --- Каркас: две колонки (SPEC §10.5) --- */
+
+.layout {
+  display: grid;
+  grid-template-columns: var(--side-width) minmax(0, 1fr);
+  align-items: start;
+}
+
+.side {
+  border-right: 1px solid var(--line);
+  background: var(--panel);
+  min-height: calc(100vh - var(--head-height));
+  min-width: 0;
+  overflow: hidden;
+}
+
+.main { min-width: 0; }
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--lineSoft);
+}
+.panel-head--prices {
+  padding: 8px 12px;
+  border-top: 1px solid var(--lineSoft);
+  background: var(--panel2);
+}
+.panel-head__title {
+  font-size: 11.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1.1px;
+  color: var(--fg2);
+}
+.panel-head__hint {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--fg3);
+}
+.panel-head__hint em { font-family: var(--font-num); font-style: italic; }
+
+.link-button {
+  background: transparent;
+  border: none;
+  padding: 0;
+  font-size: 12px;
+  color: var(--fg3);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.link-button:hover { color: var(--red); }
+
+/* --- Параметры (ROADMAP 12.3) --- */
+
+.params {
+  padding: 12px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 11px 10px;
+  border: none;
+  margin: 0;
+}
+.params__wide { grid-column: 1 / -1; }
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.field__label {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.7px;
+  color: var(--fg3);
+  white-space: nowrap;
+}
+.field input,
+.field select {
+  width: 100%;
+  min-width: 0;
+  background: var(--input);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 5px 6px;
+  font-family: var(--font-num);
+  font-size: 12.5px;
+  color: var(--fg);
+}
+.field input { text-align: right; }
+.field input:focus,
+.field select:focus { border-color: var(--cyan); outline: none; }
+
+.field--eta { justify-content: flex-end; }
+.eta {
+  border: 1px solid var(--lineSoft);
+  background: var(--panel2);
+  border-radius: 3px;
+  padding: 4px 7px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.eta__value {
+  font-family: var(--font-num);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--green);
+}
+.eta__track {
+  flex: 1;
+  height: 3px;
+  background: var(--lineSoft);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.eta__fill { display: block; height: 3px; background: var(--green); }
+
+.params__note {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--fg3);
+}
+
+.params__actions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+}
+/* Кнопка «Посчитать» — страховка на случай, когда автопересчёт не сработал
+   (SPEC §10.6). Поэтому неброская. */
+.calculate {
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 5px 14px;
+  font-size: 12px;
+  color: var(--fg2);
+  cursor: pointer;
+}
+.calculate:hover { border-color: var(--cyan); color: var(--fg); }
+
+/* --- Сетка цен (ROADMAP 12.3) --- */
+
+.price-grid-box { padding: 9px 12px 11px; }
+
+.price-grid {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-family: var(--font-num);
+}
+/* Узкая колонка под имя хаба, остальное поровну между ставкой и ценами */
+.price-grid .col-hub { width: 46px; }
+
+.price-grid th {
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--fg3);
+  padding: 0 0 5px;
+  text-align: left;
+}
+.price-grid th.num { text-align: right; padding-left: 3px; }
+.price-grid__group {
+  text-align: center;
+  font-weight: 700;
+  padding: 0 4px 5px;
+  border-left: 1px solid var(--lineSoft);
+}
+.price-grid__group--raw { color: var(--rawFg); }
+.price-grid__group--compressed { color: var(--compFg); }
+.price-grid__side {
+  text-align: right;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 0 2px 4px;
+}
+.price-grid__side--sell { color: var(--cyan); }
+.price-grid__side--buy { color: var(--buyFg); }
+.price-grid__side--first { border-left: 1px solid var(--lineSoft); }
+
+.price-grid td { padding: 2px 0 2px 2px; }
+.price-grid td.price-grid__hub {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--fg);
+  padding: 2px 3px 2px 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.price-grid td.price-grid__rate { padding: 2px 0; }
+.price-grid input {
+  width: 100%;
+  background: var(--input);
+  border: 1px solid var(--lineSoft);
+  border-radius: 2px;
+  padding: 3px;
+  font-family: var(--font-num);
+  font-size: 11px;
+  text-align: right;
+  color: var(--fg);
+}
+.price-grid__rate input { border-color: var(--line); }
+.price-grid input:focus { border-color: var(--cyan); outline: none; }
+/* Подтянутое из базы — приглушённо и курсивом: это черновик, ручной ввод
+   главнее (SPEC §4). Пометку снимает JS при первой же правке. */
+.price-grid input.fetched { color: var(--fg3); font-style: italic; }
+
+/* --- Заметки и сноски --- */
+
+.notes {
+  margin: 8px 0 0;
+  padding-left: 16px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--fg3);
+}
+.notes li { margin-bottom: 3px; }
+
+.footnote {
+  margin: 8px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--fg3);
+}
+
+/* --- Панель фильтров (SPEC §10.5) --- */
+
+.filters {
+  display: flex;
+  align-items: center;
   flex-wrap: wrap;
-  gap: 1rem;
-  margin: 1rem 0;
+  row-gap: 6px;
+  gap: 16px;
+  padding: 9px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel2);
+  position: sticky;
+  top: var(--head-height);
+  z-index: 15;
 }
-.summary .card {
-  border: 1px solid #ccc;
-  padding: 0.6rem 1rem;
-  min-width: 14rem;
+.filters__title {
+  font-size: 11.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1.1px;
+  color: var(--fg2);
 }
-.summary .big { font-size: 1.5rem; font-weight: 700; }
-.summary small { display: block; color: #555; margin-top: 0.2rem; }
-
-.notes { color: #555; margin: 0.75rem 0; padding-left: 1.25rem; }
-.breakevens p { margin: 0.25rem 0; }
-
-.errors {
-  border: 1px solid #c0392b;
-  background: #fdf0ee;
-  color: #7b241c;
-  padding: 0.6rem 1rem;
-  margin: 1rem 0;
+.filters label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--fg2);
+  cursor: pointer;
+  white-space: nowrap;
 }
-.errors ul { margin: 0.4rem 0 0; padding-left: 1.25rem; }
+.filters input {
+  accent-color: var(--cyan);
+  width: 13px;
+  height: 13px;
+  margin: 0;
+}
 
+/* --- Сообщения в правой колонке --- */
+
+.errors,
 .empty {
-  border: 1px solid #ccc;
-  background: #f7f7f7;
-  color: #555;
-  padding: 0.6rem 1rem;
-  margin: 1rem 0;
+  margin: 14px 16px;
+  background: var(--panel);
+  padding: 10px 13px;
+  border: 1px solid var(--line);
+  font-size: 13px;
+}
+.errors { border-color: var(--red); border-left-width: 3px; }
+.errors__title { font-size: 13px; font-weight: 600; color: var(--red); margin-bottom: 4px; }
+.errors ul,
+.empty ul { margin: 4px 0 0; padding-left: 18px; color: var(--fg2); }
+.empty__title { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+.empty p { margin: 0; color: var(--fg2); line-height: 1.5; }
+
+/* --- Таблица результата (ROADMAP 12.5) --- */
+
+.results-scroll { overflow-x: auto; }
+
+.results-table {
+  width: 100%;
+  min-width: 1060px;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+.results-table thead tr { background: var(--panel); }
+
+.results-table th.group {
+  text-align: left;
+  padding: 5px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--fg3);
+  border-bottom: 1px solid var(--lineSoft);
+}
+.results-table th.group--market { color: var(--cyan); }
+.results-table th.group--verdict { color: var(--gold); }
+
+.results-table th.col {
+  text-align: left;
+  padding: 6px 8px 7px;
+  font-size: 11.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.7px;
+  color: var(--fg2);
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+.results-table th.col--rank {
+  width: 30px;
+  text-align: right;
+  padding: 6px 4px 7px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--fg3);
+}
+.results-table th.col--num { text-align: right; }
+.results-table th.col--isk { text-align: right; font-weight: 700; color: var(--gold); }
+/* Границей отделяется первая колонка группы — так видно, где кончается «Рынок» */
+.results-table th.divider,
+.results-table td.divider { border-left: 1px solid var(--line); }
+
+.results-table td {
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--lineSoft);
+  white-space: nowrap;
+}
+.results-table tbody tr.alt { background: var(--rowAlt); }
+.results-table tbody tr.best { background: var(--bestBg); box-shadow: inset 2px 0 0 var(--gold); }
+.results-table tbody tr:hover { background: var(--hover); }
+
+.cell-rank {
+  text-align: right;
+  padding: 5px 4px 5px 10px;
+  font-family: var(--font-num);
+  font-size: 12px;
+  color: var(--fg3);
+}
+.cell-inline { display: flex; align-items: center; gap: 6px; }
+
+.hub-name { font-size: 14px; font-weight: 600; color: var(--fg); }
+tr.best .hub-name { color: var(--gold); }
+
+/* Значки-пометки. Символами и цветом: иконочных наборов в проекте нет (§10.1) */
+.flag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  font-family: var(--font-num);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: help;
+}
+.flag--bad { border: 1px solid var(--redLine); background: var(--redBg); color: var(--red); }
+.flag--warn { border: 1px solid var(--amberLine); background: var(--amberBg); color: var(--amber); }
+
+.form-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px 3px;
+  border-radius: 3px;
+  border: 1px solid var(--compLine);
+  background: var(--compBg);
+  color: var(--compFg);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+}
+.side-tag {
+  display: inline-flex;
+  align-items: baseline;
+  font-family: var(--font-num);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--fg3);
+}
+.side-tag b { font-weight: 600; padding: 0 1px; }
+.side-tag--sell b { color: var(--green); }
+.side-tag--buy b { color: var(--red); }
+
+.cell-num {
+  text-align: right;
+  font-family: var(--font-num);
+  font-size: 12.5px;
+}
+.cell-num--price { font-size: 13px; }
+.cell-num--soft { color: var(--fg2); }
+.cell-sub { font-family: var(--font-num); font-size: 11px; color: var(--fg3); }
+
+.cell-liquidity { min-width: 118px; white-space: normal; }
+.cell-stack { min-width: 130px; white-space: normal; }
+.cell-isk { min-width: 128px; }
+
+.bar {
+  flex: 1;
+  height: 4px;
+  background: var(--lineSoft);
+  border-radius: 2px;
+  overflow: hidden;
+  min-width: 40px;
+}
+.bar__fill { display: block; height: 100%; background: var(--green); }
+.bar__fill--warn { background: var(--amber); }
+.bar__fill--bad { background: var(--red); }
+
+.liquidity-note { font-size: 11px; margin-top: 2px; color: var(--amber); }
+.liquidity-note--bad { color: var(--red); }
+
+.stack {
+  display: flex;
+  height: 8px;
+  border-radius: 2px;
+  overflow: hidden;
+  background: var(--lineSoft);
+}
+.stack span { height: 8px; }
+.stack__gas { background: var(--cyan); }
+.stack__freight { background: var(--amber); }
+.stack__collateral { background: var(--fg3); }
+.stack__label {
+  font-family: var(--font-num);
+  font-size: 11px;
+  color: var(--fg3);
+  margin-top: 3px;
 }
 
-/* --- Шапка с аккаунтом (этап 9) --- */
-.topbar { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; }
-.account { text-align: right; font-size: 0.9rem; }
-.account .who { font-weight: 600; }
-.account small { display: block; color: #666; }
-.account form { display: inline; }
-.flash { list-style: none; padding: 0; margin: 0.5rem 0; }
-.flash li { padding: 0.4rem 0.6rem; border-left: 3px solid #999; margin-bottom: 0.25rem; }
-.flash li.error { border-color: #b00; background: #fff3f3; }
-.flash li.ok { border-color: #2a7; background: #f2fbf6; }
-.import-offer { padding: 0.5rem 0.6rem; margin: 0.5rem 0; border: 1px solid #ccc; }
-.import-offer span { margin-right: 0.5rem; }
+.isk {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  justify-content: flex-end;
+}
+.isk .bar { height: 9px; min-width: 34px; }
+.isk__value {
+  font-family: var(--font-num);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg2);
+  white-space: nowrap;
+}
+.isk__value--best { color: var(--gold); }
+.isk__value--near { color: var(--fg); }
+.isk .bar__fill { background: var(--fg2); }
+.isk .bar__fill--best { background: var(--gold); }
+.isk .bar__fill--near { background: var(--fg); }
+
+.cell-delta {
+  text-align: right;
+  padding-right: 10px;
+  font-family: var(--font-num);
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--fg2);
+}
+.cell-delta--muted { color: var(--fg3); }
+.cell-delta--warn { color: var(--amber); }
+.cell-delta--bad { color: var(--red); }
+
+/* --- Сноски и легенда (ROADMAP 12.6) --- */
+
+.legend { margin: 12px 16px 24px; }
+.legend > summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 0 7px;
+  font-size: 11.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1.1px;
+  color: var(--fg3);
+  cursor: pointer;
+  list-style: none;
+}
+.legend > summary::-webkit-details-marker { display: none; }
+.legend > summary::before { content: "\25b8"; }
+.legend[open] > summary::before { content: "\25be"; }
+.legend > summary:hover { color: var(--cyan); }
+
+.legend__body {
+  border: 1px solid var(--lineSoft);
+  background: var(--panel);
+  padding: 11px 13px 12px;
+}
+.legend__icons {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px 20px;
+}
+.legend__item { display: flex; gap: 9px; align-items: flex-start; }
+.legend__item .flag { width: 20px; height: 20px; cursor: default; }
+.legend__item span { font-size: 12.5px; color: var(--fg2); line-height: 1.45; }
+.legend__item b { color: var(--fg); }
+.legend .notes { margin-top: 11px; font-size: 12px; }
+
+.breakevens {
+  margin: 0 16px 24px;
+  border: 1px solid var(--lineSoft);
+  background: var(--panel);
+  padding: 10px 13px;
+}
+.breakevens__title {
+  font-size: 11.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1.1px;
+  color: var(--fg3);
+  margin-bottom: 6px;
+}
+.breakevens p { margin: 3px 0; font-size: 12.5px; color: var(--fg2); }
+.breakevens strong { font-family: var(--font-num); color: var(--fg); }
+
+/* --- Узкий экран (ROADMAP 12.8) ---
+   Макет нарисован только под широкий. Ниже порога колонки складываются
+   в одну, а таблица результата продолжает ездить внутри своего контейнера. */
+
+@media (max-width: 1000px) {
+  .layout { grid-template-columns: minmax(0, 1fr); }
+  .side {
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+    min-height: 0;
+  }
+  .summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .filters { position: static; }
+  .legend__icons { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Шапка тесная: второстепенные элементы уходят по одному, в порядке
+   убывания бесполезности. Имя продукта, текущий газ и блок аккаунта видны
+   всегда — на них держится ориентация на странице, и подрезать их нельзя.
+   Порядок проверен замером: шапка обрезает хвост, а хвост — это аккаунт. */
+@media (max-width: 1180px) {
+  .chip--data { display: none; }
+}
+@media (max-width: 1000px) {
+  .chip--esi { display: none; }
+}
+@media (max-width: 900px) {
+  .toggle-group,
+  .account__hint { display: none; }
+}
+@media (max-width: 620px) {
+  .gas-chip__volumes { display: none; }
+  .summary { grid-template-columns: minmax(0, 1fr); }
+}
