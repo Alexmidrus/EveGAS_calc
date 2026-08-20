@@ -40,7 +40,7 @@ from app.formatting import (
     sparkline_points,
 )
 from app.db import utcnow
-from app.services import prices, user_settings
+from app.services import prices, server_status, user_settings
 
 bp = Blueprint("main", __name__)
 
@@ -715,6 +715,9 @@ def index() -> str:
         # значения, а не предложения вокруг них (ROADMAP 12.2)
         price_age=_humanize_age(age) if age is not None else None,
         history_day=_history_last_day(gas),
+        # Состояние Tranquility снимает сборщик, страница читает из базы:
+        # пользователь до ESI не дотягивается по определению (CLAUDE.md)
+        server=server_status.load(current_app.extensions["db_engine"]),
         scenario_slots=scenario_slots(),
         sso_enabled=settings_or_none() is not None,
         offer_import=session.pop("offer_settings_import", False),

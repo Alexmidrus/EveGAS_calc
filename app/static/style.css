@@ -317,6 +317,15 @@ input.pending {
   flex: none;
 }
 
+/* Состояние сервера: цветом точки, а не текстом капсом. Четыре состояния,
+   и «неизвестно» среди них равноправное — оно остаётся серым, потому что
+   незнание это не «всё хорошо» и не «всё плохо». */
+.chip--online .chip__dot { background: var(--green); }
+.chip--vip .chip__dot { background: var(--amber); }
+.chip--offline .chip__dot { background: var(--red); }
+.chip--offline { border-color: var(--red); }
+.chip__players { font-family: var(--font-num); color: var(--fg2); }
+
 .toggle-group {
   display: flex;
   align-items: center;

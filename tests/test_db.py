@@ -82,6 +82,7 @@ class TestSchema:
     def test_all_tables_created(self, engine):
         assert set(inspect(engine).get_table_names()) == {
             "collection_run",
+            "esi_status",
             "market_snapshot",
             "market_history",
             "market_history_state",

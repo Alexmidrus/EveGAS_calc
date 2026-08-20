@@ -13,7 +13,7 @@ import pytest
 from sqlalchemy import func, select
 
 from app.core import catalog
-from app.db import Base, CollectionRun, MarketSnapshot, create_db_engine, load_ladder, session_scope, utcnow
+from app.db import Base, CollectionRun, EsiStatus, MarketSnapshot, create_db_engine, load_ladder, session_scope, utcnow
 from app.jobs import collect
 from app.jobs.lock import AlreadyRunning, file_lock
 from app.services.esi import EsiSettings
@@ -54,14 +54,29 @@ def targets():
             if t.form == "compressed"]
 
 
-def client_returning(response, record=None, by_type=None):
+# Ответ /status/ в том виде, в каком его отдаёт живой ESI (проверено 20.08.2026)
+STATUS_BODY = {
+    "server_version": "3475087",
+    "players": 26843,
+    "vip": False,
+    "start_time": "2026-08-20T11:05:14Z",
+}
+
+
+def client_returning(response, record=None, by_type=None, status=None):
     """Клиент с подменённым транспортом.
 
     Ответ выбирается по type_id из запроса, а не по счётчику вызовов: цели
     обходятся параллельно, и порядок обращений не определён.
+
+    Запрос состояния сервера идёт отдельной веткой: он один на цикл и type_id
+    в нём нет. В record он не попадает — иначе каждый тест, считающий обращения
+    за ценами, пришлось бы поправить на единицу, а считает он именно цены.
     """
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/status/"):
+            return status or httpx.Response(200, json=STATUS_BODY)
         if record is not None:
             record.append(request)
         type_id = int(request.url.params["type_id"])
@@ -137,7 +152,9 @@ class TestHappyPath:
         with session_scope(engine) as session:
             record = session.scalar(select(CollectionRun))
             assert record.status == "ok"
-            assert record.requests_made == 1
+            # Один запрос за ценами плюс один за состоянием сервера: статус —
+            # такой же поход в ESI, и в счётчике цикла он обязан быть виден
+            assert record.requests_made == 2
             assert record.snapshots_written == 2
             assert record.finished_at is not None
 
@@ -161,7 +178,10 @@ class TestSavingRequests:
         stats = run(engine, targets, client_returning(ok_response(), record=sent))
         assert sent == []
         assert stats.skipped_fresh == 1
-        assert stats.requests_made == 0
+        # За ценами не ходили вовсе; единственный запрос — состояние сервера,
+        # и оно снимается даже в цикле, где все срезы свежие: иначе чип
+        # в шапке молча состарился бы на полчаса
+        assert stats.requests_made == 1
 
     def test_not_modified_writes_nothing(self, engine, targets):
         """304 стоит вдвое дешевле и означает «прежний срез в силе»."""
@@ -375,3 +395,47 @@ class TestLock:
         monkeypatch.setattr(lock_module, "_is_stale", lambda _p: True)
         with file_lock(path):
             pass
+
+
+class TestServerStatus:
+    """Состояние сервера снимается тем же циклом (ROADMAP, пункт 2 после 0.3.0)."""
+
+    def test_status_row_written(self, engine, targets):
+        run(engine, targets, client_returning(ok_response()))
+        with session_scope(engine) as session:
+            row = session.scalar(select(EsiStatus))
+            assert row is not None
+            assert row.reachable is True
+            assert row.players == 26843
+            assert row.vip is False
+
+    def test_status_written_even_when_everything_is_fresh(self, engine, targets):
+        """Цикл без запросов за ценами всё равно обновляет состояние сервера:
+        иначе чип в шапке молча состарился бы на полчаса."""
+        future = (utcnow() + timedelta(minutes=5)).strftime("%a, %d %b %Y %H:%M:%S GMT")
+        run(engine, targets, client_returning(ok_response(expires=future)))
+
+        stats = run(engine, targets, client_returning(ok_response()))
+        assert stats.skipped_fresh == 1
+        with session_scope(engine) as session:
+            assert session.scalar(select(func.count()).select_from(EsiStatus)) == 2
+
+    def test_status_failure_does_not_break_price_collection(self, engine, targets):
+        """Цены — то, ради чего сборщик существует. Чип их не роняет."""
+        stats = run(
+            engine,
+            targets,
+            client_returning(ok_response(), status=httpx.Response(503)),
+        )
+        assert stats.errors == 0
+        assert stats.written == 2
+        with session_scope(engine) as session:
+            row = session.scalar(select(EsiStatus))
+            assert row.reachable is False
+            assert row.players is None
+            assert "503" in row.error
+
+    def test_dry_run_writes_no_status(self, engine, targets):
+        run(engine, targets, client_returning(ok_response()), dry_run=True)
+        with session_scope(engine) as session:
+            assert session.scalar(select(func.count()).select_from(EsiStatus)) == 0

@@ -377,10 +377,15 @@ class TestTerminalLayout:
         """Элементы из макета, к которым ещё нет функционала, остаются на экране,
         но не притворяются рабочими (SPEC §10.7)."""
         html = client.get("/").get_data(as_text=True)
-        assert html.count('title="функционал ещё не сделан"') >= 5
+        # Осталось четыре: переключатель RU / EN и три нерабочих фильтра.
+        # Число намеренно точное — закрывая очередной пункт списка, его
+        # положено уменьшить осознанно, а не оставить «>=» прикрывать факт
+        assert html.count('title="функционал ещё не сделан"') == 4
         # Три нерабочих фильтра из четырёх: работает только «только sell»
         assert html.count("<input type=\"checkbox\" disabled>") == 3
         assert 'name="sell_only"' in html
+        # Чип ESI из списка вышел: он показывает состояние сервера из базы
+        assert "chip--esi pending" not in html
 
     def test_header_shows_current_gas_and_data_age(self, client):
         """Шапка говорит, про какой газ идёт расчёт и насколько свежи данные."""
@@ -499,3 +504,61 @@ class TestSparkline:
         html = client.post("/calculate", data=CONTROL_FORM).get_data(as_text=True)
         assert 'class="cell-spark"' in html
         assert "Недельной линии нет" in html
+
+
+class TestServerChip:
+    """Чип состояния сервера в шапке (ROADMAP, пункт 2 после 0.3.0)."""
+
+    def seed(self, app, **fields):
+        from app.db import EsiStatus, session_scope, utcnow
+        from sqlalchemy import delete
+
+        with app.app_context():
+            engine = app.extensions["db_engine"]
+            with session_scope(engine) as session:
+                session.execute(delete(EsiStatus))
+                session.add(
+                    EsiStatus(
+                        checked_at=utcnow(),
+                        **(dict(reachable=True, players=26_930, vip=False, error=None) | fields),
+                    )
+                )
+                session.commit()
+
+    @pytest.fixture()
+    def app(self):
+        from app import create_app
+
+        app = create_app()
+        app.testing = True
+        return app
+
+    def test_online_shows_players(self, app):
+        self.seed(app)
+        html = app.test_client().get("/").get_data(as_text=True)
+        assert "chip--online" in html
+        assert "26 930" in html
+
+    def test_offline_is_not_silent(self, app):
+        """ESI не ответил — на экране это видно, а не подменено нулём."""
+        self.seed(app, reachable=False, players=None, error="ESI недоступен (503)")
+        html = app.test_client().get("/").get_data(as_text=True)
+        assert "chip--offline" in html
+        assert "не отвечает" in html
+
+    def test_unknown_when_never_collected(self, app):
+        from app.db import EsiStatus, session_scope
+        from sqlalchemy import delete
+
+        with app.app_context():
+            with session_scope(app.extensions["db_engine"]) as session:
+                session.execute(delete(EsiStatus))
+                session.commit()
+        html = app.test_client().get("/").get_data(as_text=True)
+        assert "chip--unknown" in html
+        assert "неизвестно" in html
+
+    def test_chip_is_no_longer_pending(self, app):
+        self.seed(app)
+        html = app.test_client().get("/").get_data(as_text=True)
+        assert "chip--esi pending" not in html

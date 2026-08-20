@@ -33,12 +33,19 @@
       <span class="gas-chip__volumes" id="gas-volumes">{{ volume_labels[gas.key] }}</span>
     </div>
 
-    {# Состояния ESI и числа игроков приложение не знает: пользователь к ESI
-       не ходит по определению. Чип остаётся на месте, но честно неактивен. #}
-    <div class="chip chip--fixed chip--esi pending" aria-disabled="true"
-         title="функционал ещё не сделан">
+    {# Состояние Tranquility. Спрашивает его сборщик по расписанию, страница
+       читает из базы: пользователь к ESI не ходит по определению (CLAUDE.md).
+       «Неизвестно» — полноценное четвёртое состояние, а не повод молчать. #}
+    <div class="chip chip--fixed chip--esi chip--{{ server.state }}"
+         title="{{ server.title }}">
       <span class="chip__dot"></span>ESI<span class="chip__dim">·</span>
-      <span class="chip__dim">online</span>
+      <span class="chip__dim">{{ server.label }}</span>
+      {# В макете здесь второй раз написано online — «ESI online · 21 640 online».
+         На экране в верхнем регистре это читается опечаткой, а число без
+         подписи непонятно чему принадлежит. Смысл сохранён, слово другое. #}
+      {% if server.players is not none %}<span class="chip__dim">·</span>
+      <span class="chip__players">{{ server.players|num }}</span>
+      <span class="chip__dim">в игре</span>{% endif %}
     </div>
 
     <div class="chip chip--data">

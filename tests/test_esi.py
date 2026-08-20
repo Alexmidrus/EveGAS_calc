@@ -187,3 +187,86 @@ def test_broken_json_is_reported():
     result = run(scenario())
     assert not result.ok
     assert "нечитаемый" in result.error
+
+
+class TestStatus:
+    """Состояние сервера Tranquility (ESI §8)."""
+
+    # Ответ живого ESI, снятый 20.08.2026 — форма не выдумана
+    BODY = {
+        "server_version": "3475087",
+        "players": 26843,
+        "vip": False,
+        "start_time": "2026-08-20T11:05:14Z",
+    }
+
+    def test_reads_the_answer(self):
+        snapshot = run(
+            esi.fetch_status(
+                client_for(lambda r: httpx.Response(200, json=self.BODY)),
+                SETTINGS,
+                sleep=no_sleep,
+            )
+        )
+        assert snapshot.ok
+        assert snapshot.players == 26843
+        assert snapshot.server_version == "3475087"
+        assert snapshot.vip is False
+        assert snapshot.requests_made == 1
+
+    def test_start_time_is_naive_utc(self):
+        """Время из ISO с Z приводится к тому виду, в каком живёт база."""
+        snapshot = run(
+            esi.fetch_status(
+                client_for(lambda r: httpx.Response(200, json=self.BODY)),
+                SETTINGS,
+                sleep=no_sleep,
+            )
+        )
+        assert snapshot.start_time is not None
+        assert snapshot.start_time.tzinfo is None
+        assert snapshot.start_time.isoformat() == "2026-08-20T11:05:14"
+
+    def test_vip_mode_is_read(self):
+        """Сервер поднят, но пускает только избранных."""
+        snapshot = run(
+            esi.fetch_status(
+                client_for(lambda r: httpx.Response(200, json=self.BODY | {"vip": True})),
+                SETTINGS,
+                sleep=no_sleep,
+            )
+        )
+        assert snapshot.ok and snapshot.vip is True
+
+    def test_no_type_id_in_request(self):
+        """У эндпоинта нет параметров: путь /status/ и всё."""
+        seen: list[httpx.Request] = []
+
+        def handler(request):
+            seen.append(request)
+            return httpx.Response(200, json=self.BODY)
+
+        run(esi.fetch_status(client_for(handler), SETTINGS, sleep=no_sleep))
+        assert seen[0].url.path == "/status/"
+        assert not seen[0].url.params
+
+    def test_server_down_is_an_answer_not_a_crash(self):
+        """Сервер лежит — это результат проверки, а не сбой сборщика."""
+        snapshot = run(
+            esi.fetch_status(
+                client_for(lambda r: httpx.Response(503)), SETTINGS, sleep=no_sleep
+            )
+        )
+        assert not snapshot.ok
+        assert snapshot.players is None
+        assert "503" in snapshot.error
+
+    def test_garbage_body_does_not_raise(self):
+        snapshot = run(
+            esi.fetch_status(
+                client_for(lambda r: httpx.Response(200, text="не json")),
+                SETTINGS,
+                sleep=no_sleep,
+            )
+        )
+        assert not snapshot.ok

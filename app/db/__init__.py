@@ -13,6 +13,7 @@ from app.db.engine import (
 from app.db.models import (
     Base,
     CollectionRun,
+    EsiStatus,
     MarketHistory,
     MarketHistoryState,
     MarketSnapshot,
@@ -27,6 +28,7 @@ from app.db.models import (
 __all__ = [
     "Base",
     "CollectionRun",
+    "EsiStatus",
     "MarketHistory",
     "MarketHistoryState",
     "MarketSnapshot",

@@ -25,6 +25,7 @@ DEFAULT_CACHE_TTL = 300.0
 
 ORDERS_PATH = "/markets/{region_id}/orders/"
 HISTORY_PATH = "/markets/{region_id}/history/"
+STATUS_PATH = "/status/"
 
 # Ретраи: только на 5xx, до двух повторов с экспоненциальной паузой (ESI §2).
 MAX_RETRIES = 2
@@ -449,5 +450,110 @@ async def fetch_orders_conditional(
         etag=first.headers.get("etag"),
         expires_at=_expires_at(first),
         requests_made=made,
+        **limits,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class StatusSnapshot:
+    """Состояние игрового сервера Tranquility (ESI §8).
+
+    Сбоя здесь два разных, и путать их нельзя. ``error`` — мы не смогли
+    спросить: ESI не ответил, сеть легла, пришло 5xx. ``vip`` — спросили
+    успешно, но сервер пускает только избранных: после патча он поднят
+    и отвечает, а обычный игрок войти ещё не может.
+    """
+
+    players: int | None = None
+    server_version: str | None = None
+    start_time: datetime | None = None
+    vip: bool = False
+    error: str | None = None
+    requests_made: int = 0
+    error_limit_remain: int | None = None
+    rate_limit_remain: int | None = None
+
+    @property
+    def ok(self) -> bool:
+        return self.error is None
+
+
+def _parse_start_time(raw: object) -> datetime | None:
+    """Время последнего старта сервера из ISO-строки ESI в наивный UTC.
+
+    Наивный — потому что вся база живёт в наивном UTC (этап 6): MySQL
+    и SQLite зону не хранят, и единственный переносимый вариант — договорённость.
+    """
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed
+    return parsed.astimezone(UTC).replace(tzinfo=None)
+
+
+async def fetch_status(
+    client: httpx.AsyncClient,
+    settings: EsiSettings,
+    *,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+) -> StatusSnapshot:
+    """Состояние Tranquility: поднят ли сервер и сколько на нём народу.
+
+    Один запрос за цикл сбора. Эндпоинт публичный, кэш 30 секунд, своя группа
+    рейт-лимита ``status`` с потолком 600 запросов на 15 минут — при цикле
+    раз в полчаса мы выбираем полпроцента от него (проверено живым запросом
+    20.08.2026, ESI §8).
+
+    Условных запросов здесь нет намеренно: ETag у ответа есть, но 304 сказал
+    бы «число игроков не изменилось с прошлого раза», а оно меняется каждую
+    секунду. Экономить нечего, а разбирать лишнюю ветку — можно ошибиться.
+
+    Сервер в дауне — это не исключение, а ответ по существу: он возвращается
+    в ``error`` и показывается пользователю, а не роняет цикл сбора цен.
+    """
+    try:
+        response = await _request(
+            client,
+            settings,
+            settings.base_url + STATUS_PATH,
+            {},
+            sleep=sleep,
+            what="состояния сервера",
+        )
+    except RateLimitedError:
+        raise
+    except EsiError as exc:
+        return StatusSnapshot(error=str(exc), requests_made=1)
+
+    limits = {
+        "error_limit_remain": error_limit_remaining(response),
+        "rate_limit_remain": rate_limit_remaining(response),
+    }
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        return StatusSnapshot(
+            error=f"ESI вернул нечитаемый ответ: {exc}", requests_made=1, **limits
+        )
+    if not isinstance(payload, Mapping):
+        return StatusSnapshot(
+            error="ESI вернул не объект в ответе о состоянии сервера",
+            requests_made=1,
+            **limits,
+        )
+
+    players = payload.get("players")
+    version = payload.get("server_version")
+    return StatusSnapshot(
+        players=int(players) if isinstance(players, int) else None,
+        server_version=str(version) if version is not None else None,
+        start_time=_parse_start_time(payload.get("start_time")),
+        vip=bool(payload.get("vip", False)),
+        requests_made=1,
         **limits,
     )

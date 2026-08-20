@@ -193,6 +193,38 @@ class MarketHistoryState(Base):
     tradable: Mapped[bool] = mapped_column(default=True)
 
 
+class EsiStatus(Base):
+    """Состояние игрового сервера, снятое сборщиком (ESI §8).
+
+    Зачем в базе. Пользователь к ESI не ходит по определению проекта: двести
+    человек с кнопкой «проверить сервер» — это бан. Поэтому /status/ спрашивает
+    сборщик раз в цикл, а страница читает готовую строку отсюда.
+
+    Строка на проверку, а не одна на всё: перезаписывать единственную запись
+    значит стирать историю проверок вместе с фактом «в прошлый раз не ответил».
+    Старые строки чистит тот же prune, что и срезы стакана.
+
+    Недоступность — это тоже результат проверки, а не отсутствие результата:
+    у такой строки reachable=False и текст в error, и на экране она
+    превращается в честное «ESI не отвечает», а не в молчание.
+    """
+
+    __tablename__ = "esi_status"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    checked_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    # Ответил ли ESI по существу. False — сеть, таймаут или 5xx
+    reachable: Mapped[bool] = mapped_column(default=True)
+    # None, когда не ответил: ноль здесь соврал бы «на сервере никого»
+    players: Mapped[int | None] = mapped_column(Integer, default=None)
+    server_version: Mapped[str | None] = mapped_column(String(32), default=None)
+    # Время последнего старта Tranquility, наивный UTC
+    start_time: Mapped[datetime | None] = mapped_column(DateTime, default=None)
+    # Сервер поднят, но пускает только избранных: обычный игрок войти не может
+    vip: Mapped[bool] = mapped_column(default=False)
+    error: Mapped[str | None] = mapped_column(String(255), default=None)
+
+
 class UserAccount(Base):
     """Персонаж, вошедший через EVE SSO. Ничего приватного здесь не хранится."""
 

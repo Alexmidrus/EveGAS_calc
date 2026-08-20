@@ -36,6 +36,7 @@ from app.core import catalog
 from app.core.models import Hub, OrderSide
 from app.db import (
     CollectionRun,
+    EsiStatus,
     MarketSnapshot,
     create_db_engine,
     dump_ladder,
@@ -48,7 +49,9 @@ from app.services.esi import (
     EsiSettings,
     OrdersSnapshot,
     RateLimitedError,
+    StatusSnapshot,
     fetch_orders_conditional,
+    fetch_status,
 )
 
 LOCK_PATH = BASE_DIR / "var" / "collect.lock"
@@ -233,6 +236,53 @@ def _touch(engine: Engine, target: Target, snapshot: OrdersSnapshot) -> int:
             touched += 1
     return touched
 
+async def _record_status(
+    engine: Engine,
+    settings: EsiSettings,
+    client: httpx.AsyncClient,
+    *,
+    dry_run: bool = False,
+) -> int:
+    """Снимает состояние Tranquility и кладёт строку в базу. Возвращает число запросов.
+
+    Один запрос за цикл. Сбой здесь цикл сбора цен не роняет и не считается
+    его ошибкой: чип в шапке — приятная мелочь, а цены — то, ради чего сборщик
+    существует. Но и молча пропасть сбой не должен, поэтому «не ответил»
+    пишется в базу такой же строкой, как удачный ответ.
+    """
+    try:
+        snapshot = await fetch_status(client, settings)
+    except RateLimitedError as exc:
+        # Отдельная группа лимита (ESI §8), но если уж уперлись — записываем
+        # факт и идём дальше: цены живут в других группах.
+        snapshot = StatusSnapshot(error=str(exc), requests_made=1)
+        log.warning("Состояние сервера не снято: %s", exc)
+
+    if snapshot.ok:
+        log.info(
+            "Tranquility: %s игроков%s",
+            snapshot.players,
+            ", режим VIP" if snapshot.vip else "",
+        )
+    else:
+        log.warning("Состояние сервера не снято: %s", snapshot.error)
+
+    if not dry_run:
+        with session_scope(engine) as session:
+            session.add(
+                EsiStatus(
+                    checked_at=utcnow(),
+                    reachable=snapshot.ok,
+                    players=snapshot.players,
+                    server_version=snapshot.server_version,
+                    start_time=snapshot.start_time,
+                    vip=snapshot.vip,
+                    error=snapshot.error[:255] if snapshot.error else None,
+                )
+            )
+    return snapshot.requests_made
+
+
 def prune(engine: Engine, keep: int = KEEP_SNAPSHOTS) -> int:
     """Оставляет последние keep срезов на каждую тройку. Возвращает число удалённых.
 
@@ -280,6 +330,30 @@ async def run_collection(
     if not targets:
         return stats
 
+    own_client = client is None
+    http = client or httpx.AsyncClient(timeout=settings.timeout)
+    try:
+        return await _run_cycle(engine, settings, targets, stats, http, dry_run=dry_run)
+    finally:
+        if own_client:
+            await http.aclose()
+
+
+async def _run_cycle(
+    engine: Engine,
+    settings: EsiSettings,
+    targets: Sequence[Target],
+    stats: Stats,
+    http: httpx.AsyncClient,
+    *,
+    dry_run: bool = False,
+) -> Stats:
+    """Тело цикла при уже открытом HTTP-клиенте."""
+    # Состояние сервера снимается до проверки свежести срезов: иначе в цикле,
+    # где всё свежее и запросов за ценами не нужно, чип в шапке молча
+    # состарился бы на полчаса.
+    stats.requests_made += await _record_status(engine, settings, http, dry_run=dry_run)
+
     state = _known_state(engine, targets)
     now = utcnow()
 
@@ -293,7 +367,7 @@ async def run_collection(
         pending.append(target)
 
     if not pending:
-        log.info("Все срезы свежие, запросов не потребовалось")
+        log.info("Все срезы свежие, запросов за ценами не потребовалось")
         return stats
 
     run_id: int | None = None
@@ -305,20 +379,13 @@ async def run_collection(
             run_id = run.id
 
     semaphore = asyncio.Semaphore(CONCURRENCY)
-    own_client = client is None
-    http = client or httpx.AsyncClient(timeout=settings.timeout)
-
-    try:
-        results = await asyncio.gather(
-            *(
-                _fetch_one(http, settings, target, state.get((target.hub.key, target.type_id), (None, None))[0], semaphore)
-                for target in pending
-            ),
-            return_exceptions=True,
-        )
-    finally:
-        if own_client:
-            await http.aclose()
+    results = await asyncio.gather(
+        *(
+            _fetch_one(http, settings, target, state.get((target.hub.key, target.type_id), (None, None))[0], semaphore)
+            for target in pending
+        ),
+        return_exceptions=True,
+    )
 
     for target, result in zip(pending, results, strict=True):
         if isinstance(result, RateLimitedError):
