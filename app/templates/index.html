@@ -84,9 +84,16 @@
        и анонимный режим обязан выглядеть в шапке не хуже (ROADMAP 12.7). #}
     <div class="account">
       {% if character %}
-      {# Буква в кружке, как в макете. Портрет с images.evetech.net — внешний
-         запрос за картинкой, и это отдельное решение. #}
-      <span class="account__avatar" aria-hidden="true">{{ character[1][0]|upper }}</span>
+      {# Буква в кружке — основа, портрет ложится поверх неё. Порядок именно
+         такой, а не «или-или»: картинка идёт с чужого хоста, и пока она
+         грузится — а если интернета нет, то и вовсе никогда — на её месте
+         обязано быть что-то осмысленное. onerror убирает битую картинку,
+         и буква снова оказывается сверху. #}
+      <span class="account__avatar" aria-hidden="true">{{ character[1][0]|upper }}
+        {% if portrait %}<img class="account__portrait" src="{{ portrait }}"
+             alt="" width="24" height="24" loading="lazy" decoding="async"
+             referrerpolicy="no-referrer" onerror="this.remove()">{% endif %}
+      </span>
       <span class="account__who">{{ character[1] }}</span>
       <form method="post" action="{{ url_for('auth.logout') }}"><button type="submit">Выйти</button></form>
       {% elif sso_enabled %}

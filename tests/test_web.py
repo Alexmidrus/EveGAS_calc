@@ -562,3 +562,73 @@ class TestServerChip:
         self.seed(app)
         html = app.test_client().get("/").get_data(as_text=True)
         assert "chip--esi pending" not in html
+
+
+class TestPortrait:
+    """Портрет персонажа в шапке (ROADMAP, пункт 9 после 0.3.0)."""
+
+    def test_url_is_built_from_character_id(self):
+        from app.routes import PORTRAIT_SIZE, portrait_url
+
+        url = portrait_url(2112625428)
+        assert url == (
+            "https://images.evetech.net/characters/2112625428/portrait"
+            f"?size={PORTRAIT_SIZE}"
+        )
+
+    def test_size_is_a_real_option(self):
+        """Сервис отдаёт только фиксированный ряд размеров."""
+        from app.routes import PORTRAIT_SIZE
+
+        assert PORTRAIT_SIZE in {32, 64, 128, 256, 512}
+
+    def test_anonymous_page_has_no_external_requests(self, client):
+        """Анонимный режим основной, и он обязан открываться без интернета."""
+        html = client.get("/").get_data(as_text=True)
+        assert "images.evetech.net" not in html
+        assert "http://" not in html.replace('xmlns="http://www.w3.org/2000/svg"', "")
+        assert "https://" not in html
+
+    def test_letter_stays_under_the_portrait(self, client):
+        """Буква — основа, а не замена: пока картинка грузится и если она
+        не пришла, в кружке обязано быть что-то осмысленное."""
+        from app import create_app
+        from app.routes import portrait_url
+
+        app = create_app({"APP_ENV": "dev", "DATABASE_URL": "sqlite:///:memory:",
+                          "PRICE_MAX_AGE_MINUTES": 90, "SECRET_KEY": "x" * 32,
+                          "TESTING": True})
+        from app.db import Base
+
+        Base.metadata.create_all(app.extensions["db_engine"])
+        with app.test_client() as web:
+            with web.session_transaction() as session:
+                session["character_id"] = 2112625428
+                session["character_name"] = "Тестовый Пилот"
+            html = web.get("/").get_data(as_text=True)
+
+        assert portrait_url(2112625428) in html
+        # Буква на месте вместе с картинкой, а не вместо неё
+        assert 'class="account__avatar"' in html
+        assert ">Т" in html
+        # Битая картинка убирается, иначе на её месте останется значок обрыва
+        assert 'onerror="this.remove()"' in html
+
+    def test_portraits_can_be_switched_off(self):
+        """Правило «страница открывается без интернета» обязано остаться
+        выполнимым: выключатель возвращает букву и убирает внешний адрес."""
+        from app import create_app
+        from app.db import Base
+
+        app = create_app({"APP_ENV": "dev", "DATABASE_URL": "sqlite:///:memory:",
+                          "PRICE_MAX_AGE_MINUTES": 90, "SECRET_KEY": "x" * 32,
+                          "CHARACTER_PORTRAITS": False, "TESTING": True})
+        Base.metadata.create_all(app.extensions["db_engine"])
+        with app.test_client() as web:
+            with web.session_transaction() as session:
+                session["character_id"] = 2112625428
+                session["character_name"] = "Тестовый Пилот"
+            html = web.get("/").get_data(as_text=True)
+
+        assert "images.evetech.net" not in html
+        assert 'class="account__avatar"' in html

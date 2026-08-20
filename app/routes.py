@@ -481,10 +481,26 @@ ISK_BAR_MIN_PCT = 6.0
 ISK_BAR_SPAN_PCT = 76.0
 # Огрызок полоски ликвидности: нулевая ширина читалась бы как «данных нет»
 LIQ_BAR_MIN_PCT = 4.0
+# Портреты персонажей. Единственный внешний адрес, который приложение отдаёт
+# браузеру: сама картинка ходит с машины пользователя к CCP, приложение
+# за ней не ходит и её не кэширует.
+PORTRAIT_BASE_URL = "https://images.evetech.net"
+# Кружок в шапке 24 px; берём вдвое больше — под экраны с двойной плотностью.
+# Сервис отдаёт только фиксированный ряд размеров, 64 — ближайший подходящий.
+PORTRAIT_SIZE = 64
 # Насколько цена должна уйти за неделю, чтобы спарклайн назвал это движением.
 # Ниже порога линия рисуется нейтральным цветом: недельный шум в полпроцента —
 # не тренд, и красить его в «дешевеет» значит обещать то, чего мы не знаем.
 SPARK_FLAT_PCT = 2.0
+
+
+def portrait_url(character_id: int, size: int = PORTRAIT_SIZE) -> str:
+    """Адрес портрета персонажа на сервере изображений CCP.
+
+    Публичный сервис, авторизации не требует: портрет персонажа — открытые
+    данные, и scope у нас всё равно пустой.
+    """
+    return f"{PORTRAIT_BASE_URL}/characters/{character_id}/portrait?size={size}"
 
 
 def scenario_slots() -> int:
@@ -718,6 +734,13 @@ def index() -> str:
         # Состояние Tranquility снимает сборщик, страница читает из базы:
         # пользователь до ESI не дотягивается по определению (CLAUDE.md)
         server=server_status.load(current_app.extensions["db_engine"]),
+        # None, если портреты выключены в конфиге или никто не вошёл: тогда
+        # в шапке остаётся буква в кружке и внешних запросов у страницы нет
+        portrait=(
+            portrait_url(who[0])
+            if who is not None and current_app.config["CHARACTER_PORTRAITS"]
+            else None
+        ),
         scenario_slots=scenario_slots(),
         sso_enabled=settings_or_none() is not None,
         offer_import=session.pop("offer_settings_import", False),

@@ -79,6 +79,13 @@ def _defaults(profile: str, base_dir: Path) -> dict[str, Any]:
         # Сбор идёт раз в 30 минут, так что 90 — это три пропущенных цикла
         # подряд: разовая осечка не должна пугать пользователя красной плашкой.
         "PRICE_MAX_AGE_MINUTES": 90,
+        # Портрет вошедшего персонажа с images.evetech.net. Единственный
+        # внешний запрос, который приложение делает в рантайме, и потому он
+        # выключаемый: правило «страница обязана открываться без интернета»
+        # остаётся выполнимым, а буква в кружке работает и при включённом
+        # портрете — она видна, пока картинка грузится, и остаётся, если
+        # картинка не пришла.
+        "CHARACTER_PORTRAITS": True,
         # Вход через EVE SSO. Без них приложение работает анонимно.
         "ESI_CLIENT_ID": None,
         "ESI_CLIENT_SECRET": None,
@@ -147,6 +154,7 @@ _ENV_KEYS: dict[str, Any] = {
     "ESI_TIMEOUT": _as_float,
     "ESI_CACHE_TTL": _as_int,
     "PRICE_MAX_AGE_MINUTES": _as_int,
+    "CHARACTER_PORTRAITS": _as_bool,
     "HOST": _as_str,
     "PORT": _as_int,
     "DEBUG": _as_bool,
