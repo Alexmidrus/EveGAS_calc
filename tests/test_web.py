@@ -582,12 +582,38 @@ class TestPortrait:
 
         assert PORTRAIT_SIZE in {32, 64, 128, 256, 512}
 
-    def test_anonymous_page_has_no_external_requests(self, client):
-        """Анонимный режим основной, и он обязан открываться без интернета."""
+    def test_external_hosts_are_a_known_short_list(self, client):
+        """Внешние адреса не запрещены, но они считаны (CLAUDE.md).
+
+        Тест не запрещает новый адрес — он не даёт ему появиться незамеченным.
+        Добавили внешний хост осознанно: впишите его сюда и в SPEC §10.1.
+        """
+        import re
+
+        from app import create_app
+        from app.db import Base
+
+        known = {"images.evetech.net"}
+
+        app = create_app({"APP_ENV": "dev", "DATABASE_URL": "sqlite:///:memory:",
+                          "PRICE_MAX_AGE_MINUTES": 90, "SECRET_KEY": "x" * 32,
+                          "TESTING": True})
+        Base.metadata.create_all(app.extensions["db_engine"])
+        with app.test_client() as web:
+            with web.session_transaction() as session:
+                session["character_id"] = 2112625428
+                session["character_name"] = "Тестовый Пилот"
+            pages = [client.get("/").get_data(as_text=True), web.get("/").get_data(as_text=True)]
+
+        for html in pages:
+            hosts = set(re.findall(r'(?:src|href)="https?://([^/"]+)', html))
+            assert hosts <= known, f"новый внешний хост: {hosts - known}"
+
+    def test_anonymous_page_reaches_nobody(self, client):
+        """У анонима внешних адресов нет: показывать ему нечего, и лишний
+        запрос к чужому серверу с его страницы взяться не должен."""
         html = client.get("/").get_data(as_text=True)
         assert "images.evetech.net" not in html
-        assert "http://" not in html.replace('xmlns="http://www.w3.org/2000/svg"', "")
-        assert "https://" not in html
 
     def test_letter_stays_under_the_portrait(self, client):
         """Буква — основа, а не замена: пока картинка грузится и если она
@@ -615,8 +641,10 @@ class TestPortrait:
         assert 'onerror="this.remove()"' in html
 
     def test_portraits_can_be_switched_off(self):
-        """Правило «страница открывается без интернета» обязано остаться
-        выполнимым: выключатель возвращает букву и убирает внешний адрес."""
+        """Выключатель возвращает букву и убирает внешний адрес со страницы.
+
+        Нужен закрытому контуру и тем, кто не хочет отдавать этот запрос наружу.
+        """
         from app import create_app
         from app.db import Base
 

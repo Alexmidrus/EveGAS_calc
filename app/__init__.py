@@ -34,10 +34,9 @@ def create_app(config: Mapping[str, Any] | None = None) -> Flask:
         app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
     if "SESSION_COOKIE_SECURE" not in provided:
         app.config["SESSION_COOKIE_SECURE"] = app.config.get("APP_ENV") != "dev"
-    # Портрет персонажа — единственный внешний запрос в рантайме, и умолчание
-    # у него обязано быть определено независимо от того, каким путём приехала
-    # конфигурация: сырой словарь тестов ключа не содержит, а поведение
-    # у приложения должно быть одно.
+    # Умолчание обязано быть определено независимо от того, каким путём
+    # приехала конфигурация: сырой словарь тестов ключа не содержит,
+    # а поведение у приложения должно быть одно.
     app.config.setdefault("CHARACTER_PORTRAITS", True)
 
     for warning in app.config.get("CONFIG_WARNINGS", ()):
