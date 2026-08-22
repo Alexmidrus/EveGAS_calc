@@ -1,0 +1,147 @@
+{# Разбор одной строки таблицы (SPEC §5.8). Ответ на POST /row-detail.
+
+   Ни одного числа здесь не считается: всё пришло готовым из _row_view
+   и _history_rows — теми же значениями, что стоят в таблице. Единственный
+   инлайновый стиль — ширины полосок, и те посчитал сервер. #}
+{% import "partials/icons.html" as icons %}
+{% set s = row.scenario %}
+{% set h = row.history %}
+
+<div class="detail">
+  <div class="detail__head">
+    <div class="detail__title">
+      <span class="detail__hub">{{ hub_name }}</span>
+      {% if s.form.value == 'compressed' %}
+      <span class="form-badge">{{ grid_form_labels[s.form] }}</span>{% endif %}
+      <span class="side-tag side-tag--{{ s.side.value }}">[<b>{{ s.side.value }}</b>]</span>
+      <span class="detail__rank">место {{ row.rank }} по ISK за юнит</span>
+    </div>
+    <button type="button" class="icon-button detail__close" data-close-detail
+            title="Закрыть разбор" aria-label="Закрыть разбор">×</button>
+  </div>
+
+  <div class="detail__grid">
+
+    {# --- 1. Из чего сложился итог --- #}
+    <section class="detail__col">
+      <h3 class="detail__label">Из чего сложился итог</h3>
+      <div class="stack">
+        <span class="stack__gas" title="газ" style="width: {{ row.gas_pct }}%"></span>
+        <span class="stack__freight" title="доставка" style="width: {{ row.freight_pct }}%"></span>
+        <span class="stack__collateral" title="страховка" style="width: {{ row.collateral_pct }}%"></span>
+      </div>
+      <dl class="detail__rows">
+        <div class="detail__row">
+          <dt><span class="detail__swatch detail__swatch--gas"></span>Газ с комиссией</dt>
+          <dd>{{ row.gas_cost|num }} <span class="detail__share">{{ row.gas_pct|share }}%</span></dd>
+        </div>
+        <div class="detail__row">
+          <dt><span class="detail__swatch detail__swatch--freight"></span>Доставка за объём</dt>
+          <dd>{{ s.freight_volume|num }} <span class="detail__share">{{ row.freight_pct|share }}%</span></dd>
+        </div>
+        <div class="detail__row">
+          <dt><span class="detail__swatch detail__swatch--collateral"></span>Обеспечение</dt>
+          <dd>{{ s.collateral_fee|num }} <span class="detail__share">{{ row.collateral_pct|share }}%</span></dd>
+        </div>
+        <div class="detail__row detail__row--total">
+          <dt>Итого за партию</dt>
+          <dd>{{ s.total|num }}</dd>
+        </div>
+        <div class="detail__row detail__row--total">
+          <dt>За полезный юнит</dt>
+          <dd>{{ s.isk_per_unit|num(2) }}</dd>
+        </div>
+      </dl>
+      {% if s.broker > 0 %}
+      <p class="detail__note">Брокерская комиссия {{ (inp.broker_fee * 100)|num }}% —
+        {{ s.broker|num }} ISK — входит в «газ с комиссией»: платится она бирже,
+        а не перевозчику, и в трюме не едет.</p>
+      {% endif %}
+    </section>
+
+    {# --- 2. Рынок хаба --- #}
+    <section class="detail__col">
+      <h3 class="detail__label">Рынок хаба</h3>
+      <dl class="detail__rows">
+        <div class="detail__row">
+          <dt>Ваша цена</dt>
+          <dd>{{ s.price|num }}</dd>
+        </div>
+        <div class="detail__row">
+          <dt>Опора сделок</dt>
+          <dd>{% if h %}{{ h.reference|num }}{% else %}<span class="detail__none">нет данных</span>{% endif %}</dd>
+        </div>
+        <div class="detail__row">
+          <dt>Диапазон за неделю</dt>
+          <dd>{% if h %}{{ h.lowest|num }} … {{ h.highest|num }}{% else %}<span class="detail__none">—</span>{% endif %}</dd>
+        </div>
+        <div class="detail__row">
+          <dt>Оборот в сутки</dt>
+          <dd>{% if h and not h.borrowed %}{{ h.daily_volume|compact }}{% else %}<span class="detail__none">—</span>{% endif %}</dd>
+        </div>
+        <div class="detail__row">
+          <dt>Продано за {% if h %}{{ h.window_days }}{% else %}7{% endif %} дн.</dt>
+          <dd>{% if h and not h.borrowed %}{{ h.window_volume|compact }}{% else %}<span class="detail__none">—</span>{% endif %}</dd>
+        </div>
+        <div class="detail__row">
+          <dt>Нужно купить</dt>
+          <dd>{{ s.qty|num }}</dd>
+        </div>
+        <div class="detail__row">
+          <dt>Есть в стакане</dt>
+          <dd>{% if s.available_qty is not none %}{{ s.available_qty|num }}
+            {%- else %}<span class="detail__none">неизвестно</span>{% endif %}</dd>
+        </div>
+        <div class="detail__row">
+          <dt>Ставка доставки</dt>
+          <dd>{% if freight_rate is not none %}{{ freight_rate|num }} <span class="detail__share">ISK/м³</span>
+            {%- else %}<span class="detail__none">не задана</span>{% endif %}</dd>
+        </div>
+      </dl>
+      {% if not h %}
+      <p class="detail__note">Истории сделок по этому хабу и этой форме газа нет —
+        сверить цену не с чем. Это «мы не знаем», а не «торгов не было».</p>
+      {% elif h.borrowed %}
+      <p class="detail__note">В этом регионе газом за неделю не торговали вовсе:
+        опора и диапазон взяты по сделкам в других хабах. Оборот поэтому
+        не показан — чужой за свой мы не выдаём.</p>
+      {% endif %}
+      {% if s.available_qty is none %}
+      <p class="detail__note">Глубина стакана известна только для цен, подтянутых
+        из базы. Эта цена введена руками, и сколько за ней стоит юнитов —
+        неизвестно.</p>
+      {% endif %}
+    </section>
+
+    {# --- 3. Что смущает и точка безубыточности --- #}
+    <section class="detail__col">
+      <h3 class="detail__label">Что смущает</h3>
+      {% if row.flag_no_trades or row.flag_anomaly or row.flag_low_volume %}
+      <ul class="detail__worries">
+        {% if row.flag_no_trades %}
+        <li>{{ icons.flag('no_trades', size=13) }}<span>{{ row.title_no_trades }}</span></li>
+        {% endif %}
+        {% if row.flag_anomaly %}
+        <li>{{ icons.flag('anomaly', size=13) }}<span>{{ row.title_anomaly }}</span></li>
+        {% endif %}
+        {% if row.flag_low_volume %}
+        <li>{{ icons.flag('low_volume', size=13) }}<span>{{ row.title_low_volume }}</span></li>
+        {% endif %}
+      </ul>
+      {% else %}
+      <p class="detail__calm">Ничего: цена в диапазоне сделок, объём рынок отдаёт,
+        стакана хватает.</p>
+      {% endif %}
+
+      <h3 class="detail__label detail__label--second">Точка безубыточности</h3>
+      {% if breakeven %}
+      <p class="detail__breakeven">В {{ hub_name }} сжатый выгоднее сырого, пока стоит
+        дешевле <strong>{{ breakeven.price|num }} ISK</strong>.</p>
+      {% else %}
+      <p class="detail__note">Посчитать не из чего: формула сравнивает сжатый
+        с сырым по ценам sell, а по этому хабу не заполнено — {{ missing_for_breakeven|join(', ') }}.</p>
+      {% endif %}
+    </section>
+
+  </div>
+</div>

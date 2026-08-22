@@ -4,6 +4,8 @@
    уезжает отдельным куском через hx-swap-oob (SPEC §10.5). Она обязана
    приезжать в любом исходе — иначе после ошибки на экране остались бы
    карточки от прошлого удачного расчёта. #}
+{% import "partials/icons.html" as icons %}
+
 <section class="summary" id="summary-bar" hx-swap-oob="true">
   {% if not errors and result.summary %}
   <div class="summary__card summary__card--best">
@@ -12,8 +14,11 @@
       <span class="summary__big">{{ result.summary.best.isk_per_unit|num(2) }}</span>
       <span class="summary__unit">ISK / полезный юнит</span>
     </div>
-    <span class="summary__where">{{ hub_names[result.summary.best.hub_key] }},
-      {{ form_labels[result.summary.best.form] }}, {{ result.summary.best.side.value }}</span>
+    {# Разделитель — точка по центру, как во всех подписях макета: запятая
+       в строке из трёх слов читается перечислением однородных вещей,
+       а это хаб, форма и сторона сделки — три разных измерения #}
+    <span class="summary__where">{{ hub_names[result.summary.best.hub_key] }} ·
+      {{ form_labels[result.summary.best.form] }} · {{ result.summary.best.side.value }}</span>
   </div>
   <div class="summary__card">
     <span class="summary__label">Экономия против худшего</span>
@@ -57,12 +62,22 @@
     {% for error in errors %}<li>{{ error }}</li>{% endfor %}
   </ul>
 </div>
+{% elif not result.scenarios and hidden_illiquid %}
+{# Фильтр показа схлопнул выдачу в ноль. «Недостаточно данных» тут соврало бы:
+   данные есть, их убрала галочка — и сказать об этом надо прямо (ROADMAP 14.2). #}
+<div class="empty">
+  <div class="empty__title">Все строки скрыты фильтром «скрыть неликвид»</div>
+  <p>По всем ценам за неделю не торговали. Снимите галочку, чтобы увидеть их.</p>
+</div>
 {% elif not result.scenarios %}
 <div class="empty">
   <div class="empty__title">Недостаточно данных</div>
   {% if inp.sell_only %}
   <p>Нужна ставка доставки и хотя бы одна цена sell —
     buy-сценарии скрыты фильтром «только sell».</p>
+  {% elif inp.buy_only %}
+  <p>Нужна ставка доставки и хотя бы одна цена buy —
+    sell-сценарии скрыты фильтром «только buy».</p>
   {% else %}
   <p>Нужна ставка доставки и хотя бы одна цена. Проверьте сетку цен слева.</p>
   {% endif %}
@@ -77,8 +92,16 @@
 {% else %}
 
 {# --- Основная таблица (SPEC §5.2) ---
-   Заголовки рисуются обычным текстом: сортировки кликом ещё нет, и вид
-   элемента не обещает того, чего он не делает (SPEC §10.7). #}
+   Заголовок сортируемой колонки — <button> внутри <th>, а не <th onclick>:
+   клавиатура и озвучка должны видеть кнопку. Состояние считает сервер,
+   стрелку рисует CSS по aria-sort (SPEC §5.7). #}
+{% macro sortable(key, label, extra="") %}
+{%- set state = sort_headers[key] -%}
+<th class="col col--sortable {{ extra }}" aria-sort="{{ state.aria }}">
+  <button type="button" data-sort="{{ key }}" data-sort-dir="{{ state.next }}"
+          title="{{ state.title }}">{{ label }}<span class="sort-arrow"></span></button>
+</th>
+{%- endmacro %}
 <div class="results-scroll">
 <table class="results-table">
   <thead>
@@ -90,19 +113,21 @@
       <th colspan="2" class="group group--verdict divider">Вывод</th>
     </tr>
     <tr>
-      <th class="col col--rank">#</th>
-      <th class="col">Хаб</th>
+      {# «#» — место в порядке по ISK/юнит, а не номер строки на экране:
+         при сортировке по другой колонке это уже разные вещи #}
+      <th class="col col--rank" title="Место в порядке по ISK за полезный юнит">#</th>
+      {{ sortable('hub', 'Хаб') }}
       <th class="col">Что берём</th>
-      <th class="col col--num divider">Цена</th>
+      {{ sortable('price', 'Цена', 'col--num divider') }}
       <th class="col">7 дней</th>
       <th class="col col--num">Сделки</th>
       <th class="col">Ликвидность</th>
-      <th class="col col--num divider">Купить</th>
-      <th class="col col--num">м³</th>
+      {{ sortable('qty', 'Купить', 'col--num divider') }}
+      {{ sortable('volume_m3', 'м³', 'col--num') }}
       <th class="col divider">Из чего сложилось</th>
       <th class="col col--num">Доставка</th>
-      <th class="col col--num">Итого</th>
-      <th class="col col--isk divider">ISK/юнит</th>
+      {{ sortable('total', 'Итого', 'col--num') }}
+      {{ sortable('isk_per_unit', 'ISK/юнит', 'col--isk divider') }}
       <th class="col col--num">Δ</th>
     </tr>
   </thead>
@@ -110,22 +135,26 @@
     {% for row in rows %}
     {% set s = row.scenario %}
     {% set h = row.history %}
-    <tr class="{% if row.is_best %}best{% elif row.is_odd %}alt{% endif %}">
+    {# Клик по строке открывает разбор (SPEC §5.8). Строка доступна с клавиатуры:
+       tabindex и Enter — иначе для части людей этого элемента просто нет.
+       Считает панель сервер тем же кодом, что и таблицу. #}
+    <tr class="row-open {% if row.is_best %}best{% elif row.is_odd %}alt{% endif %}"
+        tabindex="0" title="Открыть разбор строки"
+        hx-post="/row-detail" hx-include="#calc-form" hx-vals='{"row": "{{ row.key }}"}'
+        hx-target="#row-detail" hx-swap="innerHTML"
+        hx-trigger="click, keyup[key=='Enter']">
       <td class="cell-rank">{{ row.rank }}</td>
-      <td>
+      <td class="cell-tags">
         <div class="cell-inline">
           <span class="hub-name">{{ hub_names[s.hub_key] }}</span>
           {# Три значка вместо пяти внутренних пометок; текст подсказки
              различает случаи, а расшифровка лежит в блоке сносок #}
-          {% if row.flag_no_trades %}
-          <span class="flag flag--bad" title="{{ row.title_no_trades }}">⊘</span>{% endif %}
-          {% if row.flag_anomaly %}
-          <span class="flag flag--bad" title="{{ row.title_anomaly }}">!</span>{% endif %}
-          {% if row.flag_low_volume %}
-          <span class="flag flag--warn" title="{{ row.title_low_volume }}">↓</span>{% endif %}
+          {% if row.flag_no_trades %}{{ icons.flag('no_trades', row.title_no_trades) }}{% endif %}
+          {% if row.flag_anomaly %}{{ icons.flag('anomaly', row.title_anomaly) }}{% endif %}
+          {% if row.flag_low_volume %}{{ icons.flag('low_volume', row.title_low_volume) }}{% endif %}
         </div>
       </td>
-      <td>
+      <td class="cell-tags">
         <div class="cell-inline">
           {% if s.form.value == 'compressed' %}
           <span class="form-badge">{{ grid_form_labels[s.form] }}</span>{% endif %}
@@ -156,7 +185,7 @@
           <span class="bar"><span
             class="bar__fill{% if row.liquidity_tone != 'ok' %} bar__fill--{{ row.liquidity_tone }}{% endif %}"
             style="width: {{ row.liquidity_bar }}"></span></span>
-          <span class="cell-sub">{{ h.daily_volume|compact }}/сут</span>
+          <span class="liquidity-daily">{{ h.daily_volume|compact }}/сут</span>
         </div>
         {% if row.liquidity_note %}
         <div class="liquidity-note{% if row.liquidity_tone == 'bad' %} liquidity-note--bad{% endif %}">{{ row.liquidity_note }}</div>
@@ -176,8 +205,12 @@
         </div>
         <div class="stack__label">{{ row.stack_label }}</div>
       </td>
-      <td class="cell-num cell-num--soft">{{ s.freight|num }}</td>
-      <td class="cell-num">{{ s.total|num }}</td>
+      {# Доставка и итог — компактной записью, как в макете: девятизначное
+         число распирает колонку, а читают его всё равно порядком. Точное
+         значение никуда не делось — оно в подсказке ячейки; ISK за юнит
+         рядом стоит до сотых, разложение по статьям — в полоске слева. #}
+      <td class="cell-num cell-num--soft" title="{{ s.freight|num }} ISK">{{ s.freight|compact }}</td>
+      <td class="cell-num" title="{{ s.total|num }} ISK">{{ s.total|compact }}</td>
       <td class="cell-isk divider">
         <div class="isk">
           <span class="bar"><span class="bar__fill bar__fill--{{ row.isk_tone }}"
@@ -193,90 +226,54 @@
 </table>
 </div>
 
-{# --- Сноски: расшифровка значков, сбор, предупреждения, выпавшие хабы ---
-   Закрыто по умолчанию, но ни одна сноска не удалена: каждая объясняет
-   число на экране (ROADMAP 12.6). #}
-<details class="legend">
-  <summary>Сноски и предупреждения</summary>
-  <div class="legend__body">
-    <div class="legend__icons">
-      <div class="legend__item">
-        <span class="flag flag--bad">⊘</span>
-        <span><b>Сделок по такой цене не было.</b> За неделю по ней не торговали —
-          ордер, скорее всего, не исполнится. Цена не пересчитана: решать вам.</span>
-      </div>
-      <div class="legend__item">
-        <span class="flag flag--bad">!</span>
-        <span><b>Аномальная цена.</b> Сильно отличается от медианы по остальным
-          хабам — проверьте, не опечатка ли.</span>
-      </div>
-      <div class="legend__item">
-        <span class="flag flag--warn">↓</span>
-        <span><b>Маленький оборот газа.</b> Рынок отдаёт меньше, чем нужно:
-          набирать придётся дольше, дороже или в другом хабе. Недельный оборот,
-          суточный оборот и глубина стакана — про разное, подсказка на значке
-          говорит, что именно не сходится.</span>
-      </div>
-    </div>
-
-    <ul class="notes">
-      {% if inp.sell_only %}
-      <li>Показаны только sell-сценарии: buy-ордер — это заявка, она может не исполниться.
-        Снимите галочку «только sell», чтобы увидеть все варианты.</li>
-      {% endif %}
-      {% if inp.collateral_pct > 0 %}
-      <li>В «Доставку» входит обеспечение — {{ (inp.collateral_pct * 100)|num }}% от стоимости
-        газа. Оно своё в каждой строке: где газ дороже, там и надбавка больше. У лучшего
-        варианта это {{ result.scenarios[0].collateral_fee|num }} ISK
-        при плате за объём {{ result.scenarios[0].freight_volume|num }} ISK.</li>
-      {% endif %}
-      {% if has_outliers %}
-      <li>Цена сильно выбивается — проверьте.</li>
-      {% endif %}
-      {% if has_shallow %}
-      <li>Глубины стакана не хватает на нужный объём: цена посчитана по тому, что есть,
-        остальное придётся добирать дороже или в другом хабе. Глубина известна только
-        для цен, подтянутых из ESI, и стоит подписью в колонке «Купить».</li>
-      {% endif %}
-      {% if has_unconfirmed %}
-      <li>Неликвидная цена: за неделю сделок по ней не было. Цена не пересчитана —
-        решать вам, но такой ордер, скорее всего, не исполнится.</li>
-      {% endif %}
-      {% if has_volume_warning %}
-      <li>Объём: рынок хаба может не отдать нужное количество за раз. «Столько
-        не набрать» — за всю неделю в регионе продали меньше, чем вам нужно;
-        «набирать несколько дней» — больше суточного оборота. Это про проданное,
-        а не про выставленное: глубина стакана считается отдельно.</li>
-      {% endif %}
-      {% if has_borrowed %}
-      <li>«По другим хабам» — в этом регионе газом за неделю не торговали вовсе,
-        и цена сверяется со сделками в остальных хабах. Для проверки на мусор этого
-        достаточно: разница между хабами — десятки процентов, а не разы. Оборот
-        в такой строке не показывается: чужой за свой мы не выдаём.</li>
-      {% endif %}
-      {% if history_last_day %}
-      <li>Колонки «Сделки» и «Ликвидность» — реальные сделки в регионе хаба за неделю
-        по {{ history_last_day.strftime('%d.%m.%Y') }} включительно. Сегодняшнего дня
-        в истории ESI не бывает: она обновляется раз в сутки.</li>
-      {% endif %}
-      {% for hub_key in result.skipped_hubs %}
-      <li>{{ hub_names[hub_key] }}: не задана доставка</li>
-      {% endfor %}
-    </ul>
-  </div>
-</details>
-
-{# --- Точки безубыточности (SPEC §5.3) ---
-   В макете они переехали в «Разбор строки», которого пока нет. До его
-   появления блок остаётся на своём месте под таблицей. #}
-{% if result.breakevens %}
-<div class="breakevens">
-  <div class="breakevens__title">Точки безубыточности</div>
-  {% for b in result.breakevens %}
-  <p>{{ hub_names[b.hub_key] }}: сжатый выгоднее сырого, пока стоит дешевле
-    <strong>{{ b.price|num }} ISK</strong></p>
-  {% endfor %}
-</div>
+{# Счётчик скрытого. Без него фильтр превращается в способ не заметить, что
+   половина рынка отвалилась (ROADMAP 14.0). Ноль скрытых не пишется вовсе:
+   «скрыто 0 строк» — шум. #}
+{% if hidden_illiquid %}
+<p class="hidden-rows">Скрыто строк: <b>{{ hidden_illiquid|num }}</b> — по этим ценам
+  за неделю не торговали. Снимите галочку «скрыть неликвид», чтобы увидеть их.</p>
 {% endif %}
+{% if collapsed_rows %}
+<p class="hidden-rows">Показано по одной строке на хаб. Свёрнуто строк:
+  <b>{{ collapsed_rows|num }}</b> — у каждого хаба осталась самая дешёвая.
+  Снимите галочку «по одной строке на хаб», чтобы увидеть остальные.</p>
+{% endif %}
+
+{# Панель разбора строки: пустая, пока по строке не кликнули. Живёт внутри
+   ответа /calculate, поэтому любое изменение параметров закрывает её само —
+   блок результата приезжает заново, и панель в нём пустая (ROADMAP 17.0). #}
+<div id="row-detail"></div>
+
+{# --- Легенда значков ---
+   Раскрывашки здесь больше нет: три пометки на строках — это то, ради чего
+   человек и смотрит в таблицу, и прятать их за клик незачем. Списка сносок
+   тоже нет: после появления панели «Разбор строки» каждая из них объясняла
+   то, что панель говорит про конкретную строку и с её числами (SPEC §5.9). #}
+<div class="legend">
+  <div class="legend__icons">
+    <div class="legend__item">
+      {{ icons.flag('no_trades', size=13) }}
+      <span><b>Сделок по такой цене не было.</b> За неделю по ней не торговали —
+        ордер, скорее всего, не исполнится. Цена не пересчитана: решать вам.</span>
+    </div>
+    <div class="legend__item">
+      {{ icons.flag('anomaly', size=13) }}
+      <span><b>Аномальная цена.</b> Сильно отличается от медианы по остальным
+        хабам — проверьте, не опечатка ли.</span>
+    </div>
+    <div class="legend__item">
+      {{ icons.flag('low_volume', size=13) }}
+      <span><b>Маленький оборот газа.</b> Рынок отдаёт меньше, чем нужно:
+        набирать придётся дольше, дороже или в другом хабе. Недельный оборот,
+        суточный оборот и глубина стакана — про разное, подсказка на значке
+        говорит, что именно не сходится.</span>
+    </div>
+  </div>
+</div>
+
+{# Блок «Точки безубыточности» стоял здесь до 22.08.2026. Убран по решению
+   пользователя: как и было нарисовано в макете, число живёт в «Разборе строки»,
+   где стоит рядом с ценами своего хаба (SPEC §5.3). Считать его ядро
+   не перестало — `result.breakevens` читает /row-detail. #}
 
 {% endif %}

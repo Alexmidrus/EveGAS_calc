@@ -506,6 +506,131 @@ class TestSellOnlyFilter:
         assert result.summary.loss_units is None
 
 
+class TestBuyOnlyFilter:
+    """Зеркальный фильтр «только buy» (SPEC §5.4): показать одни заявки."""
+
+    def test_sell_scenarios_disappear(self):
+        result = calc.build_scenarios(control_input(buy_only=True), CONTROL_PRICES)
+        assert all(s.side is OrderSide.BUY for s in result.scenarios)
+        assert len(result.scenarios) == 4  # из десяти строк контрольного примера
+
+    def test_buy_rows_are_unchanged(self):
+        """Фильтр только убирает строки, но не трогает арифметику оставшихся."""
+        full = calc.build_scenarios(control_input(), CONTROL_PRICES)
+        filtered = calc.build_scenarios(control_input(buy_only=True), CONTROL_PRICES)
+
+        full_buys = {
+            (s.hub_key, s.form): s.total for s in full.scenarios if s.side is OrderSide.BUY
+        }
+        for row in filtered.scenarios:
+            assert row.total == pytest.approx(full_buys[(row.hub_key, row.form)])
+
+    def test_summary_recomputed_on_filtered_rows(self):
+        """Лучший вариант полного примера — buy, он же остаётся лучшим под фильтром."""
+        result = calc.build_scenarios(control_input(buy_only=True), CONTROL_PRICES)
+        assert result.summary.best.hub_key == "amarr"
+        assert result.summary.best.side is OrderSide.BUY
+        assert result.summary.best.isk_per_unit == pytest.approx(2742.71, abs=0.01)
+        assert result.summary.best.delta_pct is None
+
+    def test_breakevens_survive_the_filter(self):
+        """Точки безубыточности считаются по sell-ценам и к сторонам выдачи не относятся."""
+        result = calc.build_scenarios(control_input(buy_only=True), CONTROL_PRICES)
+        assert len(result.breakevens) == 1
+        assert result.breakevens[0].price == pytest.approx(4645, abs=0.01)
+
+    def test_only_sell_prices_gives_empty_result(self):
+        """Заполнены только sell — показывать нечего, но и падать не за что."""
+        result = calc.build_scenarios(
+            control_input(buy_only=True),
+            {"jita": HubPrices(freight_rate=500, compressed_sell=2400)},
+        )
+        assert result.scenarios == ()
+        assert result.summary is None
+
+    def test_both_filters_at_once_is_an_error(self):
+        """Взаимоисключающие фильтры — ValueError, а не молча пустая выдача."""
+        with pytest.raises(ValueError, match="исключают друг друга"):
+            calc.build_scenarios(
+                control_input(sell_only=True, buy_only=True), CONTROL_PRICES
+            )
+
+
+class TestSummarize:
+    """Сводка отдельной функцией (ROADMAP 14.1).
+
+    Тело у неё то же, что раньше стояло в `build_scenarios` inline. Отдельной
+    её сделали потому, что считать сводку приходится дважды: интерфейс
+    отбирает видимые строки по данным истории сделок, которых ядро не видит,
+    и после такого отбора «Лучший вариант» обязан пересчитаться по видимому.
+    """
+
+    def test_build_scenarios_still_gives_control_numbers(self):
+        """Выделение функции не сдвинуло контрольный пример DOMAIN §5 ни на число."""
+        result = calc.build_scenarios(control_input(), CONTROL_PRICES)
+        assert result.summary.best.isk_per_unit == pytest.approx(2742.71, abs=0.01)
+        assert result.summary.savings_vs_worst == pytest.approx(138_614_620, abs=0.01)
+        assert result.summary.loss_units == 6_180
+        assert result.scenarios[0].delta_pct is None
+
+    def test_same_input_same_summary(self):
+        """Прогон по всем строкам результата даёт ровно то, что уже в нём лежит."""
+        result = calc.build_scenarios(control_input(), CONTROL_PRICES)
+        rows, summary = calc.summarize(
+            result.scenarios, 50_000, result.compressed_qty
+        )
+        assert rows == result.scenarios
+        assert summary == result.summary
+
+    def test_empty_input(self):
+        """Пустой вход — пустая выдача и None вместо сводки, без падения."""
+        assert calc.summarize((), 50_000, 56_180) == ((), None)
+
+    def test_delta_recounted_from_the_new_best(self):
+        """Убрали лучшую строку — прочерк переехал на новую первую,
+        а отставание остальных пересчитано от неё."""
+        result = calc.build_scenarios(control_input(), CONTROL_PRICES)
+        rows, summary = calc.summarize(
+            result.scenarios[1:], 50_000, result.compressed_qty
+        )
+        assert rows[0].delta_pct is None
+        assert summary.best.isk_per_unit == pytest.approx(rows[0].isk_per_unit)
+        assert rows[1].delta_pct == pytest.approx(
+            (rows[1].isk_per_unit / rows[0].isk_per_unit - 1) * 100
+        )
+        # Прежнее значение Δ относилось к другой точке отсчёта и обязано было
+        # уехать: у второй строки полного примера оно было заметно больше
+        assert rows[1].delta_pct < result.scenarios[2].delta_pct
+
+    def test_savings_counted_on_the_visible_rows(self):
+        """Экономия против худшего — по тому, что осталось, а не по исходному."""
+        result = calc.build_scenarios(control_input(), CONTROL_PRICES)
+        visible = result.scenarios[:3]
+        _rows, summary = calc.summarize(visible, 50_000, result.compressed_qty)
+        assert summary.savings_vs_worst == pytest.approx(
+            visible[-1].total - visible[0].total, abs=0.01
+        )
+
+    def test_loss_disappears_without_compressed_rows(self):
+        """Остались одни сырые строки — потерь на разжатии показывать нечего."""
+        result = calc.build_scenarios(control_input(), CONTROL_PRICES)
+        raw_rows = [s for s in result.scenarios if s.form is GasForm.RAW]
+        assert raw_rows, "в контрольном примере есть сырые строки"
+        _rows, summary = calc.summarize(raw_rows, 50_000, result.compressed_qty)
+        assert summary.loss_units is None
+        assert summary.loss_pct is None
+
+    def test_single_row_is_both_best_and_worst(self):
+        """Одна строка: экономия нулевая, Δ прочерк — и никаких исключений."""
+        result = calc.build_scenarios(control_input(), CONTROL_PRICES)
+        rows, summary = calc.summarize(
+            result.scenarios[:1], 50_000, result.compressed_qty
+        )
+        assert len(rows) == 1
+        assert rows[0].delta_pct is None
+        assert summary.savings_vs_worst == pytest.approx(0.0)
+
+
 class TestShallowBookWarning:
     """Пометка «в стакане меньше, чем нужно» (SPEC §6).
 

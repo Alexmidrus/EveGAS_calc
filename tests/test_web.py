@@ -68,6 +68,10 @@ class TestFormatting:
         assert fmt_compact(138_440_465) == "138.4M"
         assert fmt_compact(2_500_000_000) == "2.5B"
         assert fmt_compact(950_000) == "950 000"
+        # От тысячи дробная часть не показывается: сотые доли юнита в среднем
+        # за неделю — это не точность, а мусор в колонке «Ликвидность»
+        assert fmt_compact(9_123.86) == "9 124"
+        assert fmt_compact(12.5) == "12.5"
 
     def test_percent(self):
         """Проценты: целые по умолчанию, точность задаётся."""
@@ -132,24 +136,44 @@ class TestCalculateControlExample:
     def test_summary(self, html):
         """Сводка: лучший вариант, экономия, потери."""
         assert "Amarr" in html
-        assert "сжатый, buy" in html
+        assert "сжатый · buy" in html
         assert "138.6M" in html      # экономия против худшего
         assert "11%" in html         # процент потерь
 
-    def test_breakeven(self, html):
-        """Точка безубыточности Jita: 4 645 ISK. От обеспечения не зависит."""
-        assert "сжатый выгоднее сырого" in html
-        assert "4 645" in html
+    def test_breakeven_lives_in_the_row_detail(self, client):
+        """Точка безубыточности Jita: 4 645 ISK. От обеспечения не зависит.
 
-    def test_collateral_note(self, html):
-        """Сноска: процент, надбавка лучшей строки и плата за объём отдельно."""
-        assert "обеспечение — 0.5%" in html
-        assert "575 845" in html     # надбавка Amarr / сжатый / buy
-        assert "19 663 000" in html  # плата за объём той же строки
+        Блока под таблицей больше нет — убран 22.08.2026. Число стоит
+        в разборе строки, рядом с ценами своего хаба.
+        """
+        panel = client.post(
+            "/row-detail", data=dict(CONTROL_FORM, row="jita|compressed|sell")
+        ).get_data(as_text=True)
+        assert "сжатый выгоднее сырого" in panel
+        assert "4 645" in panel
 
-    def test_no_missing_rate_notes(self, html):
-        """Все ставки заданы — пометок «не задана доставка» нет."""
-        assert "не задана доставка" not in html
+    def test_no_breakeven_block_under_the_table(self, html):
+        """Под таблицей блока нет ни в каком виде."""
+        assert "Точки безубыточности" not in html
+        assert "breakevens" not in html
+
+    def test_collateral_split_lives_in_the_row_detail(self, client):
+        """Обеспечение отдельно от платы за объём — в разборе строки.
+
+        Под таблицей этих чисел больше нет: список сносок убран 22.08.2026,
+        а его работу делает панель разбора — там та же надбавка стоит рядом
+        со своей строкой и своим итогом, а не «где-то в таблице».
+        """
+        panel = client.post(
+            "/row-detail", data=dict(CONTROL_FORM, row="amarr|compressed|buy")
+        ).get_data(as_text=True)
+        assert "575 845" in panel        # надбавка Amarr / сжатый / buy
+        assert "19 663 000" in panel     # плата за объём той же строки
+        assert "Обеспечение" in panel
+
+    def test_all_rates_set_is_stated(self, html):
+        """Все ставки заданы — так и написано в карточке «Сценариев в расчёте»."""
+        assert "все хабы со ставкой доставки" in html
 
 
 class TestCalculateVariants:
@@ -165,10 +189,12 @@ class TestCalculateVariants:
 
     def test_bigger_collateral_raises_freight(self, client):
         """2% вместо 0.5%: надбавка Amarr вчетверо больше, 575 845 → 2 303 380."""
-        form = dict(CONTROL_FORM, collateral_pct="2")
-        html = client.post("/calculate", data=form).get_data(as_text=True)
-        assert "2 303 380" in html
-        assert "обеспечение — 2%" in html
+        form = dict(CONTROL_FORM, collateral_pct="2", row="amarr|compressed|buy")
+        panel = client.post("/row-detail", data=form).get_data(as_text=True)
+        assert "2 303 380" in panel
+        # Доставка в разборе разложена на объём и обеспечение, одной суммой
+        # её там нет — этим разбор и полезнее прежней сноски
+        assert "21 966 380" not in panel
 
     def test_collateral_missing(self, client):
         """Пустое поле обеспечения — понятная ошибка, а не молчаливый ноль."""
@@ -187,7 +213,9 @@ class TestCalculateVariants:
         form = dict(CONTROL_FORM)
         del form["hek_rate"]
         html = client.post("/calculate", data=form).get_data(as_text=True)
-        assert "Hek: не задана доставка" in html
+        # Список сносок убран, но молчать про выпавший хаб нельзя: его называет
+        # карточка «Сценариев в расчёте» в полосе итогов
+        assert "без доставки:" in html and "Hek" in html
         assert "4 093.05" not in html  # строка Hek выпала
 
     def test_empty_grid(self, client):
@@ -202,7 +230,11 @@ class TestCalculateVariants:
         form = dict(CONTROL_FORM)
         form["dodixie_compressed_sell"] = "50000"  # в ~17 раз выше медианы
         html = client.post("/calculate", data=form).get_data(as_text=True)
-        assert "Цена сильно выбивается" in html
+        # Значок стоит на самой строке, и его подсказка — то, что раньше было
+        # сноской. Разница в том, что теперь она привязана к строке, а не
+        # к таблице целиком
+        body = html[html.index("<tbody>"):html.index("</tbody>")]
+        assert 'aria-label="Аномальная цена' in body
 
 
 class TestSellOnlyFilter:
@@ -217,20 +249,24 @@ class TestSellOnlyFilter:
     def test_on_hides_buy_rows(self, client):
         form = dict(CONTROL_FORM, sell_only="on")
         html = client.post("/calculate", data=form).get_data(as_text=True)
-        assert "2 742.71" not in html          # buy-строки ушли
-        assert "2 990.46" in html              # Amarr сжатый sell остался
-        assert "Показаны только sell" in html  # и об этом сказано
+        assert "2 742.71" not in html   # buy-строки ушли
+        assert "2 990.46" in html       # Amarr сжатый sell остался
+        # Сноски, объяснявшей фильтр, больше нет: про него говорит сама галочка
+        # в панели фильтров. Проверяем то, что фильтр сделал с таблицей
+        body = html[html.index("<tbody>"):html.index("</tbody>")]
+        assert "side-tag--buy" not in body
 
     def test_best_variant_recomputed(self, client):
         """Сводка пересчитана по оставшимся строкам."""
         form = dict(CONTROL_FORM, sell_only="on")
         html = client.post("/calculate", data=form).get_data(as_text=True)
-        assert "сжатый, sell" in html
+        assert "сжатый · sell" in html
 
-    def test_breakeven_still_shown(self, client):
-        form = dict(CONTROL_FORM, sell_only="on")
-        html = client.post("/calculate", data=form).get_data(as_text=True)
-        assert "4 645" in html
+    def test_breakeven_ignores_the_filter(self, client):
+        """Точка безубыточности считается по ценам sell и фильтру не подчиняется."""
+        form = dict(CONTROL_FORM, sell_only="on", row="jita|compressed|sell")
+        panel = client.post("/row-detail", data=form).get_data(as_text=True)
+        assert "4 645" in panel
 
     def test_checkbox_present_on_page(self, client):
         html = client.get("/").get_data(as_text=True)
@@ -241,6 +277,50 @@ class TestSellOnlyFilter:
         html = client.get("/").get_data(as_text=True)
         assert "input delay:400ms" in html
         assert "Посчитать" in html
+
+
+class TestBuyOnlyFilter:
+    """Чекбокс «только buy» — зеркало «только sell» (SPEC §5.4)."""
+
+    def test_on_hides_sell_rows(self, client):
+        form = dict(CONTROL_FORM, buy_only="on")
+        html = client.post("/calculate", data=form).get_data(as_text=True)
+        assert "2 742.71" in html          # Amarr сжатый buy остался
+        assert "2 990.46" not in html      # Amarr сжатый sell ушёл
+        body = html[html.index("<tbody>"):html.index("</tbody>")]
+        assert "side-tag--sell" not in body  # ни одной sell-строки в таблице
+
+    def test_breakeven_ignores_the_filter(self, client):
+        """Точки безубыточности считаются по sell-ценам и фильтру не подчиняются.
+
+        Проверяется на buy-строке: sell-строк в выдаче нет вовсе, а число
+        всё равно на месте — именно это и значит «фильтру не подчиняется».
+        """
+        form = dict(CONTROL_FORM, buy_only="on", row="jita|compressed|buy")
+        panel = client.post("/row-detail", data=form).get_data(as_text=True)
+        assert "4 645" in panel
+
+    def test_both_filters_is_a_form_error(self, client):
+        """Оба фильтра разом — ошибка формы. «Недостаточно данных» тут соврало бы:
+        данные есть, выдачу схлопнули фильтры."""
+        form = dict(CONTROL_FORM, sell_only="on", buy_only="on")
+        html = client.post("/calculate", data=form).get_data(as_text=True)
+        assert "Расчёт не выполнен" in html
+        assert "исключают друг друга" in html
+        assert "Недостаточно данных" not in html
+
+    def test_empty_state_names_the_filter(self, client):
+        """Цен buy нет вовсе — пустое состояние говорит, кто скрыл строки."""
+        form = {k: v for k, v in CONTROL_FORM.items() if not k.endswith("_buy")}
+        form["buy_only"] = "on"
+        html = client.post("/calculate", data=form).get_data(as_text=True)
+        assert "Недостаточно данных" in html
+        assert "скрыты фильтром «только buy»" in html
+
+    def test_checkbox_present_on_page(self, client):
+        html = client.get("/").get_data(as_text=True)
+        assert 'name="buy_only"' in html
+        assert 'id="buy-only"' in html
 
 
 class TestGasesApi:
@@ -334,9 +414,26 @@ class TestTerminalLayout:
     """
 
     def test_dark_theme_is_default(self, client):
-        """Тёмная тема — по умолчанию, и она стоит в разметке до всякого JS."""
+        """Тёмная тема — по умолчанию, и она держится без всякого JS.
+
+        С этапа 18 у анонима атрибута `data-theme` в разметке нет вовсе: его
+        ставит скрипт в <head>, а серверу тут сказать нечего — настроек
+        аккаунта у анонима не бывает. Тёмная поэтому обязана лежать прямо
+        в `:root`, иначе страница до выполнения скрипта окажется никакой.
+        """
+        from pathlib import Path
+
         html = client.get("/").get_data(as_text=True)
-        assert 'data-theme="dark"' in html
+        assert "data-theme=" not in html[: html.index("<head>")]
+
+        css = (
+            Path(__file__).resolve().parent.parent / "app" / "static" / "style.css"
+        ).read_text(encoding="utf-8")
+        root = css[css.index(":root {") : css.index("}", css.index(":root {"))]
+        light = css[css.index('[data-theme="light"] {') :][:600]
+        # Тёмный фон объявлен в :root, светлый — только под атрибутом
+        assert "--bg:" in root
+        assert "--bg:" in light
 
     def test_theme_applied_before_first_paint(self, client):
         """Выбор темы читается из localStorage в <head>, а не после отрисовки:
@@ -377,15 +474,66 @@ class TestTerminalLayout:
         """Элементы из макета, к которым ещё нет функционала, остаются на экране,
         но не притворяются рабочими (SPEC §10.7)."""
         html = client.get("/").get_data(as_text=True)
-        # Осталось четыре: переключатель RU / EN и три нерабочих фильтра.
-        # Число намеренно точное — закрывая очередной пункт списка, его
-        # положено уменьшить осознанно, а не оставить «>=» прикрывать факт
-        assert html.count('title="функционал ещё не сделан"') == 4
-        # Три нерабочих фильтра из четырёх: работает только «только sell»
-        assert html.count("<input type=\"checkbox\" disabled>") == 3
-        assert 'name="sell_only"' in html
+        # Осталась одна: переключатель RU / EN. Число намеренно точное —
+        # закрывая очередной пункт списка, его положено уменьшить осознанно,
+        # а не оставить «>=» прикрывать факт
+        assert html.count('title="функционал ещё не сделан"') == 1
+        # Все четыре фильтра из макета работают: неактивных чекбоксов не осталось
+        assert html.count("<input type=\"checkbox\" disabled>") == 0
+        for name in ("sell_only", "buy_only", "hide_illiquid", "best_per_hub"):
+            assert f'name="{name}"' in html
         # Чип ESI из списка вышел: он показывает состояние сервера из базы
         assert "chip--esi pending" not in html
+
+    def test_flags_are_drawings_and_not_letters(self, client):
+        """Значки-пометки нарисованы, а не набраны символами.
+
+        В макете это три разных силуэта. Символ в рамке (`⊘`, `!`, `↓`)
+        читается значком только в мыслях того, кто его поставил, и три пометки
+        подряд перестают отличаться друг от друга.
+        """
+        import re
+
+        html = client.post("/calculate", data=CONTROL_FORM).get_data(as_text=True)
+        flags = re.findall(r'<span class="flag[^"]*"[^>]*>(.*?)</span>', html, re.S)
+        assert flags, "значки не отрисованы"
+        for body in flags:
+            assert "<svg" in body, f"значок набран символом: {body.strip()[:40]}"
+        # Расшифровка в сносках показывает те же три значка, что и таблица
+        legend = html[html.index('class="legend__icons"'):]
+        assert legend.count('<span class="flag') == 3
+
+    def test_header_shows_the_version(self, client):
+        """Номер версии стоит в шапке и приходит из app/version.py.
+
+        Хардкод здесь означал бы второе место, где записан номер, и разошлись
+        бы они в первый же выпуск.
+        """
+        from app.version import __version__
+
+        html = client.get("/").get_data(as_text=True)
+        head = html[: html.index("</header>")]
+        assert "chip--version" in head
+        assert __version__ in head
+
+    def test_legend_is_always_visible_and_icons_only(self, client):
+        """Легенда значков раскрывашкой быть перестала, списка сносок в ней нет."""
+        html = client.post("/calculate", data=CONTROL_FORM).get_data(as_text=True)
+        assert "<details" not in html
+        assert "Сноски и предупреждения" not in html
+        legend = html[html.index('class="legend"'):]
+        legend = legend[: legend.index("</div>", legend.index("legend__icons"))]
+        assert "<ul" not in legend
+        # Расшифровки всех трёх значков на месте
+        for text in ("Сделок по такой цене не было.", "Аномальная цена.",
+                     "Маленький оборот газа."):
+            assert text in html
+
+    def test_no_note_under_the_params(self, client):
+        """Подписи под настройками нет: убрана 22.08.2026 по решению пользователя."""
+        html = client.get("/").get_data(as_text=True)
+        assert "params__note" not in html
+        assert "Страховка — процент от стоимости газа" not in html
 
     def test_header_shows_current_gas_and_data_age(self, client):
         """Шапка говорит, про какой газ идёт расчёт и насколько свежи данные."""
@@ -401,7 +549,8 @@ class TestTerminalLayout:
         html = client.get("/").get_data(as_text=True)
         for name in (
             "gas", "n_units", "structure", "gde_level", "broker_fee",
-            "collateral_pct", "sell_only", "jita_rate", "jita_compressed_sell",
+            "collateral_pct", "sell_only", "buy_only", "hide_illiquid",
+            "best_per_hub", "sort", "sort_dir", "jita_rate", "jita_compressed_sell",
             "jita_compressed_sell_auto", "jita_compressed_sell_depth",
         ):
             assert f'name="{name}"' in html, f"поле {name} исчезло из формы"

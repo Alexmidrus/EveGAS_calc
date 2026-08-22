@@ -48,6 +48,8 @@ def create_app(config: Mapping[str, Any] | None = None) -> Flask:
     app.add_template_filter(formatting.fmt_number, "num")
     app.add_template_filter(formatting.fmt_compact, "compact")
     app.add_template_filter(formatting.fmt_percent, "pct")
+    # Доля в подписи к полоске: «<1» вместо нуля у ненулевого остатка
+    app.add_template_filter(formatting.fmt_share, "share")
 
     from app import db
 

@@ -315,6 +315,9 @@ input.pending {
   border-radius: 50%;
   background: var(--fg3);
   flex: none;
+  /* Ореол вокруг точки — из макета. Подложки значков уже посчитаны на обе
+     темы, второго набора полупрозрачных цветов заводить незачем. */
+  box-shadow: 0 0 0 3px var(--dotGlow, transparent);
 }
 
 /* Состояние сервера: цветом точки, а не текстом капсом. Четыре состояния,
@@ -323,8 +326,17 @@ input.pending {
 .chip--online .chip__dot { background: var(--green); }
 .chip--vip .chip__dot { background: var(--amber); }
 .chip--offline .chip__dot { background: var(--red); }
-.chip--offline { border-color: var(--red); }
+.chip--online { --dotGlow: var(--greenBg); }
+.chip--vip { --dotGlow: var(--amberBg); }
+.chip--offline { --dotGlow: var(--redBg); border-color: var(--red); }
 .chip__players { font-family: var(--font-num); color: var(--fg2); }
+
+/* Чип состояния сервера подписан моноширинным, как в макете: рядом с ним
+   стоит число игроков, и подпись с числом обязаны быть набраны одинаково.
+   Курсор-вопрос — потому что за чипом висит подсказка с подробностями. */
+.chip--esi { cursor: help; }
+.chip__esi { font-family: var(--font-num); font-weight: 600; }
+.chip--data { padding: 4px 8px; }
 
 .toggle-group {
   display: flex;
@@ -507,6 +519,7 @@ input.pending {
   letter-spacing: -0.5px;
   line-height: 1.05;
 }
+.summary__card--best .summary__value { gap: 8px; }
 .summary__big--savings { color: var(--green); }
 .summary__big--loss { color: var(--amber); }
 .summary__unit { font-size: 12px; color: var(--fg2); }
@@ -639,14 +652,6 @@ input.pending {
 }
 .eta__fill { display: block; height: 3px; background: var(--green); }
 
-.params__note {
-  grid-column: 1 / -1;
-  margin: 0;
-  font-size: 11px;
-  line-height: 1.45;
-  color: var(--fg3);
-}
-
 .params__actions {
   grid-column: 1 / -1;
   display: flex;
@@ -688,23 +693,23 @@ input.pending {
   text-align: left;
 }
 .price-grid th.num { text-align: right; padding-left: 3px; }
-.price-grid__group {
+.price-grid th.price-grid__group {
   text-align: center;
   font-weight: 700;
   padding: 0 4px 5px;
   border-left: 1px solid var(--lineSoft);
 }
-.price-grid__group--raw { color: var(--rawFg); }
-.price-grid__group--compressed { color: var(--compFg); }
-.price-grid__side {
+.price-grid th.price-grid__group--raw { color: var(--rawFg); }
+.price-grid th.price-grid__group--compressed { color: var(--compFg); }
+.price-grid th.price-grid__side {
   text-align: right;
   font-size: 11px;
   font-weight: 600;
   padding: 0 2px 4px;
 }
-.price-grid__side--sell { color: var(--cyan); }
-.price-grid__side--buy { color: var(--buyFg); }
-.price-grid__side--first { border-left: 1px solid var(--lineSoft); }
+.price-grid th.price-grid__side--sell { color: var(--cyan); }
+.price-grid th.price-grid__side--buy { color: var(--buyFg); }
+.price-grid th.price-grid__side--first { border-left: 1px solid var(--lineSoft); }
 
 .price-grid td { padding: 2px 0 2px 2px; }
 .price-grid td.price-grid__hub {
@@ -744,13 +749,6 @@ input.pending {
   color: var(--fg3);
 }
 .notes li { margin-bottom: 3px; }
-
-.footnote {
-  margin: 8px 0 0;
-  font-size: 11px;
-  line-height: 1.5;
-  color: var(--fg3);
-}
 
 /* --- Панель фильтров (SPEC §10.5) --- */
 
@@ -807,7 +805,13 @@ input.pending {
 .empty__title { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
 .empty p { margin: 0; color: var(--fg2); line-height: 1.5; }
 
-/* --- Таблица результата (ROADMAP 12.5) --- */
+/* --- Таблица результата (ROADMAP 12.5) ---
+
+   Отступы служебных ячеек написаны как `.results-table td.cell-…`, а не просто
+   `.cell-…`: базовое правило `.results-table td` — это класс плюс тег, и один
+   класс его не перебивает. В макете отступов такой ячейки нет вовсе, там всё
+   инлайном; у нас это грабли, на которые уже наступили — колонка «#» и Δ
+   прижимались к краю таблицы вместо своих 10 px. */
 
 .results-scroll { overflow-x: auto; }
 
@@ -853,6 +857,45 @@ input.pending {
 }
 .results-table th.col--num { text-align: right; }
 .results-table th.col--isk { text-align: right; font-weight: 700; color: var(--gold); }
+/* Сортируемые заголовки (ROADMAP 16). Внутри <th> стоит <button>, а не
+   обработчик на самой ячейке: клавиатура и озвучка должны видеть кнопку.
+   Выглядит она как обычный заголовок — курсор-рука и подсветка появляются
+   только там, где сортировка действительно есть, а текущее направление
+   показывает стрелка у активной колонки.
+
+   Селекторы намеренно длиннее нужного: `th.col` задаёт отступы и выключку,
+   и модификатор обязан писаться через него, иначе правило молча не подействует
+   (tests/test_style.py). */
+.results-table th.col.col--sortable { padding: 0; }
+.results-table th.col.col--sortable button {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  padding: 6px 8px 7px;
+  border: 0;
+  background: none;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+/* Выключка вправо у числовых колонок: text-align на ячейке до содержимого
+   flex-кнопки не достаёт */
+.results-table th.col.col--sortable.col--num button,
+.results-table th.col.col--sortable.col--isk button { justify-content: flex-end; }
+.results-table th.col.col--sortable button:hover { color: var(--cyan); }
+.results-table th.col.col--sortable button:focus-visible {
+  outline: 1px solid var(--cyan);
+  outline-offset: -1px;
+}
+/* Стрелка — только у активной колонки, глифом из CSS, как уже сделано
+   у раскрывашки сносок */
+.results-table th.col.col--sortable .sort-arrow { font-size: 9px; line-height: 1; }
+.results-table th.col.col--sortable[aria-sort="ascending"] .sort-arrow::before { content: "▴"; }
+.results-table th.col.col--sortable[aria-sort="descending"] .sort-arrow::before { content: "▾"; }
+
 /* Границей отделяется первая колонка группы — так видно, где кончается «Рынок» */
 .results-table th.divider,
 .results-table td.divider { border-left: 1px solid var(--line); }
@@ -866,7 +909,7 @@ input.pending {
 .results-table tbody tr.best { background: var(--bestBg); box-shadow: inset 2px 0 0 var(--gold); }
 .results-table tbody tr:hover { background: var(--hover); }
 
-.cell-rank {
+.results-table td.cell-rank {
   text-align: right;
   padding: 5px 4px 5px 10px;
   font-family: var(--font-num);
@@ -874,11 +917,18 @@ input.pending {
   color: var(--fg3);
 }
 .cell-inline { display: flex; align-items: center; gap: 6px; }
+/* Ячейки со значками и бейджами в макете выше числовых на пиксель:
+   рамка значка иначе прижимается к линии строки */
+.results-table td.cell-tags { padding: 6px 8px; }
 
 .hub-name { font-size: 14px; font-weight: 600; color: var(--fg); }
 tr.best .hub-name { color: var(--gold); }
 
-/* Значки-пометки. Символами и цветом: иконочных наборов в проекте нет (§10.1) */
+/* Значки-пометки. Рисунок — из макета: три силуэта, нарисованные линиями,
+   а не буквы и стрелки в рамке. Сами SVG лежат в partials/icons.html
+   и красятся через currentColor, поэтому цвет здесь задаётся один раз
+   на рамку, подложку и линии сразу. Иконочного набора в проекте по-прежнему
+   нет: четыре десятка байт разметки — это не зависимость (SPEC §10.1). */
 .flag {
   display: inline-flex;
   align-items: center;
@@ -887,11 +937,9 @@ tr.best .hub-name { color: var(--gold); }
   width: 18px;
   height: 18px;
   border-radius: 3px;
-  font-family: var(--font-num);
-  font-size: 12px;
-  font-weight: 700;
   cursor: help;
 }
+.flag svg { display: block; }
 .flag--bad { border: 1px solid var(--redLine); background: var(--redBg); color: var(--red); }
 .flag--warn { border: 1px solid var(--amberLine); background: var(--amberBg); color: var(--amber); }
 
@@ -933,15 +981,17 @@ tr.best .hub-name { color: var(--gold); }
 /* Спарклайн «7 дней». Цвет задаётся классом тона и подхватывается линией
    через currentColor: цвет по данным, а не инлайновым стилем (SPEC §10.3).
    Зелёный здесь за падение цены — приложение газ покупает. */
-.cell-spark { text-align: center; padding: 5px 8px 3px; }
+.results-table td.cell-spark { text-align: center; padding: 5px 8px 3px; }
 .spark { display: block; margin: 0 auto; overflow: visible; }
 .spark--good { color: var(--green); }
 .spark--bad { color: var(--red); }
 .spark--flat { color: var(--fg3); }
 
-.cell-liquidity { min-width: 118px; white-space: normal; }
-.cell-stack { min-width: 130px; white-space: normal; }
-.cell-isk { min-width: 128px; }
+/* Три широкие ячейки переносят содержимое: в макете нет `nowrap` ни у одной
+   из них — не переносятся только подписи внутри, у каждой он свой */
+.results-table td.cell-liquidity { min-width: 118px; white-space: normal; }
+.results-table td.cell-stack { min-width: 130px; white-space: normal; }
+.results-table td.cell-isk { min-width: 128px; }
 
 .bar {
   flex: 1;
@@ -955,7 +1005,15 @@ tr.best .hub-name { color: var(--gold); }
 .bar__fill--warn { background: var(--amber); }
 .bar__fill--bad { background: var(--red); }
 
-.liquidity-note { font-size: 11px; margin-top: 2px; color: var(--amber); }
+/* Оборот в сутки — не сноска, а второе число колонки: в макете он крупнее
+   и светлее прочих подписей под строкой */
+.liquidity-daily {
+  font-family: var(--font-num);
+  font-size: 11.5px;
+  color: var(--fg2);
+  white-space: nowrap;
+}
+.liquidity-note { font-size: 11px; margin-top: 2px; color: var(--amber); white-space: nowrap; }
 .liquidity-note--bad { color: var(--red); }
 
 .stack {
@@ -974,6 +1032,7 @@ tr.best .hub-name { color: var(--gold); }
   font-size: 11px;
   color: var(--fg3);
   margin-top: 3px;
+  white-space: nowrap;
 }
 
 .isk {
@@ -996,7 +1055,7 @@ tr.best .hub-name { color: var(--gold); }
 .isk .bar__fill--best { background: var(--gold); }
 .isk .bar__fill--near { background: var(--fg); }
 
-.cell-delta {
+.results-table td.cell-delta {
   text-align: right;
   padding-right: 10px;
   font-family: var(--font-num);
@@ -1004,32 +1063,19 @@ tr.best .hub-name { color: var(--gold); }
   font-weight: 500;
   color: var(--fg2);
 }
-.cell-delta--muted { color: var(--fg3); }
-.cell-delta--warn { color: var(--amber); }
-.cell-delta--bad { color: var(--red); }
+.results-table td.cell-delta--muted { color: var(--fg3); }
+.results-table td.cell-delta--warn { color: var(--amber); }
+.results-table td.cell-delta--bad { color: var(--red); }
 
-/* --- Сноски и легенда (ROADMAP 12.6) --- */
+/* --- Легенда значков (ROADMAP 12.6, переработана 22.08.2026) ---
 
-.legend { margin: 12px 16px 24px; }
-.legend > summary {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 0 0 7px;
-  font-size: 11.5px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 1.1px;
-  color: var(--fg3);
-  cursor: pointer;
-  list-style: none;
-}
-.legend > summary::-webkit-details-marker { display: none; }
-.legend > summary::before { content: "\25b8"; }
-.legend[open] > summary::before { content: "\25be"; }
-.legend > summary:hover { color: var(--cyan); }
+   Была раскрывашкой со списком сносок. Раскрывашку убрали: три пометки —
+   то, ради чего человек смотрит в таблицу, и прятать их за клик незачем.
+   Список сносок убрали вместе с ней — его работу делает панель разбора
+   строки, и делает лучше: с числами конкретной строки. */
 
-.legend__body {
+.legend {
+  margin: 12px 16px 24px;
   border: 1px solid var(--lineSoft);
   background: var(--panel);
   padding: 11px 13px 12px;
@@ -1043,24 +1089,129 @@ tr.best .hub-name { color: var(--gold); }
 .legend__item .flag { width: 20px; height: 20px; cursor: default; }
 .legend__item span { font-size: 12.5px; color: var(--fg2); line-height: 1.45; }
 .legend__item b { color: var(--fg); }
-.legend .notes { margin-top: 11px; font-size: 12px; }
 
-.breakevens {
-  margin: 0 16px 24px;
-  border: 1px solid var(--lineSoft);
-  background: var(--panel);
-  padding: 10px 13px;
+/* --- Панель «Разбор строки» (ROADMAP 17) ---
+
+   Открывается кликом по строке, рисует её сервер, HTMX подставляет. Три
+   колонки через gap: 1px на подложке --lineSoft — линии между ними рисует
+   сама подложка, как в макете. Полоска слева отмечает, что это разбор
+   выбранной строки, а не ещё один блок под таблицей. */
+
+.results-table tbody tr.row-open { cursor: pointer; }
+.results-table tbody tr.row-open:hover { background: var(--panel2); }
+.results-table tbody tr.row-open:focus-visible {
+  outline: 1px solid var(--cyan);
+  outline-offset: -1px;
 }
-.breakevens__title {
-  font-size: 11.5px;
+
+.detail {
+  margin: 12px 16px 0;
+  border: 1px solid var(--line);
+  border-left: 0;
+  box-shadow: inset 3px 0 0 var(--cyan);
+  background: var(--panel);
+}
+.detail__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px 8px 13px;
+  border-bottom: 1px solid var(--line);
+}
+.detail__title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.detail__hub { font-size: 13px; font-weight: 600; color: var(--fg); }
+.detail__rank { font-size: 11.5px; color: var(--fg3); }
+.detail__close { margin-left: auto; font-size: 15px; line-height: 1; }
+
+.detail__grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1px;
+  background: var(--lineSoft);
+}
+.detail__col { padding: 11px 13px; background: var(--panel); }
+.detail__label {
+  margin: 0 0 8px;
+  font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 1.1px;
-  color: var(--fg3);
-  margin-bottom: 6px;
+  letter-spacing: 1px;
+  color: var(--fg2);
 }
-.breakevens p { margin: 3px 0; font-size: 12.5px; color: var(--fg2); }
-.breakevens strong { font-family: var(--font-num); color: var(--fg); }
+.detail__label--second { margin-top: 14px; }
+
+.detail__rows { margin: 0; }
+.detail__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 3px 0;
+  font-size: 12.5px;
+}
+.detail__row dt { display: flex; align-items: center; gap: 6px; color: var(--fg2); }
+.detail__row dd {
+  margin: 0;
+  font-family: var(--font-num);
+  color: var(--fg);
+  white-space: nowrap;
+}
+.detail__row--total {
+  border-top: 1px solid var(--lineSoft);
+  margin-top: 3px;
+  padding-top: 6px;
+}
+.detail__row--total dt { color: var(--fg); font-weight: 600; }
+.detail__row--total dd { font-weight: 600; }
+.detail__share { color: var(--fg3); font-size: 11px; }
+.detail__none { font-family: var(--font-text); color: var(--fg3); font-size: 11.5px; }
+
+/* Квадратик цвета против полоски раскладки: подпись обязана сходиться
+   с тем, что нарисовано выше, а не заставлять угадывать по порядку */
+.detail__swatch { width: 8px; height: 8px; flex: 0 0 auto; }
+.detail__swatch--gas { background: var(--cyan); }
+.detail__swatch--freight { background: var(--amber); }
+.detail__swatch--collateral { background: var(--fg3); }
+
+.detail .stack { margin-bottom: 10px; }
+
+.detail__note {
+  margin: 9px 0 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--fg3);
+}
+.detail__calm { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--green); }
+.detail__worries { margin: 0; padding: 0; list-style: none; }
+.detail__worries li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--fg2);
+}
+.detail__worries .flag { width: 20px; height: 20px; flex: 0 0 auto; cursor: default; }
+.detail__breakeven { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--fg2); }
+.detail__breakeven strong { font-family: var(--font-num); color: var(--gold); }
+
+/* Узкий экран: три колонки в одну, линии между ними остаются */
+@media (max-width: 900px) {
+  .detail__grid { grid-template-columns: 1fr; }
+}
+
+/* Счётчик скрытого фильтром «скрыть неликвид» (ROADMAP 14.2). Приглушённо,
+   но не невидимо: строка объясняет, почему в таблице стало меньше строк,
+   и без неё фильтр превращается в способ этого не заметить. */
+.hidden-rows {
+  margin: 10px 16px 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--fg3);
+}
+.hidden-rows b { font-family: var(--font-num); color: var(--fg2); }
+
 
 /* --- Узкий экран (ROADMAP 12.8) ---
    Макет нарисован только под широкий. Ниже порога колонки складываются

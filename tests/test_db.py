@@ -203,6 +203,53 @@ class TestRoundTrip:
             assert settings.broker_fee == Decimal("0.0150")
             assert settings.collateral_pct == Decimal("0.0050")
             assert settings.sell_only is True
+            # Соседние фильтры не задавали — умолчание держит форма, а не база
+            assert settings.buy_only is False
+            assert settings.hide_illiquid is False
+            assert settings.best_per_hub is False
+            # Порядок не выбирали — умолчание держит форма, а не база
+            assert settings.sort_column is None
+            assert settings.sort_dir is None
+
+    def test_buy_only_stored(self, engine, account):
+        """Зеркальный фильтр хранится наравне с «только sell»."""
+        with session_scope(engine) as session:
+            session.add(UserSettings(character_id=account, buy_only=True))
+        with session_scope(engine) as session:
+            settings = session.scalar(select(UserSettings))
+            assert settings.buy_only is True
+            assert settings.sell_only is False
+
+    def test_hide_illiquid_stored(self, engine, account):
+        """Фильтр показа хранится наравне с фильтрами сторон: разъехавшееся
+        поведение соседних галочек хуже, чем их отсутствие."""
+        with session_scope(engine) as session:
+            session.add(UserSettings(character_id=account, hide_illiquid=True))
+        with session_scope(engine) as session:
+            settings = session.scalar(select(UserSettings))
+            assert settings.hide_illiquid is True
+            assert settings.sell_only is False
+            assert settings.buy_only is False
+            assert settings.best_per_hub is False
+
+    def test_best_per_hub_stored(self, engine, account):
+        """Свёртка по хабам — четвёртая галочка панели, хранится так же."""
+        with session_scope(engine) as session:
+            session.add(UserSettings(character_id=account, best_per_hub=True))
+        with session_scope(engine) as session:
+            settings = session.scalar(select(UserSettings))
+            assert settings.best_per_hub is True
+            assert settings.hide_illiquid is False
+
+    def test_sort_order_stored(self, engine, account):
+        """Порядок таблицы переезжает вместе с остальными настройками."""
+        with session_scope(engine) as session:
+            session.add(
+                UserSettings(character_id=account, sort_column="total", sort_dir="desc")
+            )
+        with session_scope(engine) as session:
+            settings = session.scalar(select(UserSettings))
+            assert (settings.sort_column, settings.sort_dir) == ("total", "desc")
 
     def test_freight_rate_one_per_hub(self, engine, account):
         """Ключ составной: две ставки на один хаб для одного персонажа невозможны."""

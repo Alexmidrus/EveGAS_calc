@@ -1,5 +1,8 @@
 <!doctype html>
-<html lang="ru" data-theme="dark">
+{# Тема вошедшего известна серверу и ставится сразу; у анонима атрибута нет,
+   и его проставит скрипт ниже. Без атрибута страница тёмная — так задан
+   :root в style.css, поэтому мигания нет ни в одном из двух режимов. #}
+<html lang="ru"{% if theme %} data-theme="{{ theme }}"{% endif %}>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -10,6 +13,10 @@
      подключается ниже и выполнится уже после первого кадра. #}
   <script>
     (function () {
+      /* Атрибут уже стоит — значит тему прислал сервер из настроек аккаунта,
+         и она главнее: настройка, которая не переезжает между браузерами,
+         и есть то, что мы чиним (ROADMAP 18.0). */
+      if (document.documentElement.hasAttribute("data-theme")) { return; }
       try {
         var saved = localStorage.getItem("gascalc.theme");
         if (saved === "light" || saved === "dark") {
@@ -38,8 +45,8 @@
        «Неизвестно» — полноценное четвёртое состояние, а не повод молчать. #}
     <div class="chip chip--fixed chip--esi chip--{{ server.state }}"
          title="{{ server.title }}">
-      <span class="chip__dot"></span>ESI<span class="chip__dim">·</span>
-      <span class="chip__dim">{{ server.label }}</span>
+      <span class="chip__dot"></span>
+      <span class="chip__esi">ESI {{ server.label }}</span>
       {# В макете здесь второй раз написано online — «ESI online · 21 640 online».
          На экране в верхнем регистре это читается опечаткой, а число без
          подписи непонятно чему принадлежит. Смысл сохранён, слово другое. #}
@@ -54,6 +61,12 @@
       <span class="chip__dim">история {{ history_day.strftime('%d.%m.%Y') }}</span>{% endif %}
     </div>
 
+    {# Номер версии — рядом с состоянием данных, а не в подвале: он про то же,
+       что и соседние чипы, — какое приложение сейчас считает. Значение одно
+       на весь проект и приходит из app/version.py. #}
+    <div class="chip chip--fixed chip--version" title="Версия приложения">
+      <span class="chip__dim">v</span>{{ version }}</div>
+
     <div class="topbar__spacer"></div>
 
     {# Английского интерфейса нет: все тексты зашиты по-русски. Кнопки на месте,
@@ -64,7 +77,8 @@
     </div>
 
     <button type="button" class="icon-button theme-toggle" id="theme-toggle"
-            title="Сменить тему" aria-label="Сменить тему">
+            title="Сменить тему" aria-label="Сменить тему"
+            aria-pressed="{{ 'true' if theme == 'light' else 'false' }}">
       <svg class="icon-sun" width="14" height="14" viewBox="0 0 16 16" fill="none"
            stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true">
         <circle cx="8" cy="8" r="3.1"></circle>
@@ -211,9 +225,6 @@
                  min="0" max="{{ defaults.collateral_pct_max }}" step="any">
         </label>
 
-        <p class="params__note">Страховка — процент от стоимости газа, надбавка к доставке
-          в каждом сценарии, без брокерской комиссии.</p>
-
         <div class="params__actions">
           <button type="submit" class="calculate">Посчитать</button>
         </div>
@@ -239,19 +250,31 @@
     </aside>
 
     <main class="main">
-      {# Панель фильтров липнет под шапкой. Работает пока один фильтр —
-         остальные из макета оставлены неактивными (SPEC §10.7). #}
+      {# Панель фильтров липнет под шапкой. Все четыре галочки рабочие:
+         две отбирают сторону сделки, две — что показать из построенного. #}
       <div class="filters">
         <span class="filters__title">Результат</span>
-        {# Фильтр результата (SPEC §5.4): buy-ордер — заявка, а не покупка #}
+        {# Фильтры сторон (SPEC §5.4): buy-ордер — заявка, а не покупка.
+           Взаимоисключающие: обе галочки разом — ошибка формы, а не пустая
+           таблица; в браузере их гасит settings.js. #}
         <label><input type="checkbox" name="sell_only" id="sell-only"{% if defaults.sell_only %} checked{% endif %}>только sell</label>
-        <label class="pending" title="функционал ещё не сделан">
-          <input type="checkbox" disabled>только buy</label>
-        <label class="pending" title="функционал ещё не сделан">
-          <input type="checkbox" disabled>скрыть неликвид</label>
-        <label class="pending" title="функционал ещё не сделан">
-          <input type="checkbox" disabled>по одной строке на хаб</label>
+        <label><input type="checkbox" name="buy_only" id="buy-only"{% if defaults.buy_only %} checked{% endif %}>только buy</label>
+        {# Фильтр показа, а не расчёта: скрывает строки, по ценам которых
+           за неделю не торговали. Что именно скрыто — говорит счётчик под
+           таблицей: молча выкидывать строки нельзя (SPEC §5.5). #}
+        <label><input type="checkbox" name="hide_illiquid" id="hide-illiquid"{% if defaults.hide_illiquid %} checked{% endif %}>скрыть неликвид</label>
+        {# Тоже фильтр показа: оставляет у каждого хаба самую дешёвую строку.
+           Применяется после «скрыть неликвид» (SPEC §5.6). #}
+        <label><input type="checkbox" name="best_per_hub" id="best-per-hub"{% if defaults.best_per_hub %} checked{% endif %}>по одной строке на хаб</label>
       </div>
+
+      {# Выбранная сортировка. Поля скрытые и живут здесь, а не в ответе
+         /calculate: HTMX подменяет только #results, а порядок обязан пережить
+         подмену. Пишет их settings.js по клику на заголовок (SPEC §5.7). #}
+      <input type="hidden" name="sort" id="sort-column"
+             value="{{ defaults.sort or 'isk_per_unit' }}">
+      <input type="hidden" name="sort_dir" id="sort-dir"
+             value="{{ defaults.sort_dir or 'asc' }}">
 
       {# --- Блок 3. Результат: заполняется HTMX-ответом POST /calculate --- #}
       <div id="results"></div>

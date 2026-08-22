@@ -8,7 +8,7 @@
 import json
 import math
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 
 from flask import Blueprint, current_app, render_template, request, session
@@ -19,6 +19,7 @@ from app.core.models import (
     COLLATERAL_PCT_DEFAULT,
     COLLATERAL_PCT_MAX,
     CalcInput,
+    CalcResult,
     Gas,
     GasForm,
     Hub,
@@ -40,6 +41,7 @@ from app.formatting import (
     sparkline_points,
 )
 from app.db import utcnow
+from app.version import __version__
 from app.services import prices, server_status, user_settings
 
 bp = Blueprint("main", __name__)
@@ -290,6 +292,92 @@ def _history_rows(gas: Gas, scenarios: Sequence[object]) -> dict[str, dict[str, 
     return rows
 
 
+def _apply_visibility(
+    inp: CalcInput,
+    result: CalcResult,
+    history_rows: dict[str, dict[str, object]],
+    visible: Sequence[object],
+) -> tuple[CalcResult, dict[str, dict[str, object]], int]:
+    """Оставляет в показе переданные строки и приводит к ним всё остальное.
+
+    Общая машинка обоих фильтров показа (ROADMAP 14.1, 15.1). Сводка считается
+    заново по видимым строкам — иначе «Лучший вариант» покажет строку, которой
+    в таблице нет. Свод истории урезается до тех же строк: сноска про пометку,
+    которой на экране больше нет, объясняет пустое место.
+
+    Ничего не убрали — возвращаем как было, без лишнего пересчёта.
+    """
+    hidden = len(result.scenarios) - len(visible)
+    if not hidden:
+        return result, history_rows, 0
+
+    scenarios, summary = calculator.summarize(visible, inp.n_units, result.compressed_qty)
+    kept = {
+        _history_row_key(scenario.hub_key, scenario.form, scenario.side)
+        for scenario in scenarios
+    }
+    return (
+        replace(result, scenarios=scenarios, summary=summary),
+        {key: row for key, row in history_rows.items() if key in kept},
+        hidden,
+    )
+
+
+def _drop_illiquid(
+    inp: CalcInput,
+    result: CalcResult,
+    history_rows: dict[str, dict[str, object]],
+) -> tuple[CalcResult, dict[str, dict[str, object]], int]:
+    """Убирает из показа строки, по ценам которых за неделю не торговали.
+
+    Фильтр показа, а не расчёта: признак `unconfirmed` считает история сделок,
+    а ядро её не видит и видеть не должно — `calculator.py` импортирует только
+    stdlib и `models.py`. Ядро решает, какие сценарии существуют; интерфейс
+    решает, какие из них показать (ROADMAP 14.0).
+
+    Строка без истории не скрывается: «мы не знаем» — не то же самое, что
+    «неликвид», и выдавать незнание за факт нельзя. Аномальная цена и маленький
+    оборот тоже остаются: это разные пометки про разное, и склеивать их в одну
+    галочку нельзя.
+    """
+    visible = []
+    for scenario in result.scenarios:
+        row = history_rows.get(
+            _history_row_key(scenario.hub_key, scenario.form, scenario.side)
+        )
+        if row is not None and row["unconfirmed"]:
+            continue
+        visible.append(scenario)
+
+    return _apply_visibility(inp, result, history_rows, visible)
+
+
+def _best_per_hub(
+    inp: CalcInput,
+    result: CalcResult,
+    history_rows: dict[str, dict[str, object]],
+) -> tuple[CalcResult, dict[str, dict[str, object]], int]:
+    """Оставляет по каждому хабу одну строку — самую дешёвую из его четырёх.
+
+    «Лучшая» — по `isk_per_unit`, той же метрике, по которой отсортирована вся
+    таблица. Список приходит отсортированным по возрастанию, поэтому первое
+    вхождение каждого `hub_key` и есть лучшая строка хаба (ROADMAP 15.0).
+
+    Отсюда требование к этапу 16: сортировка по любой другой колонке
+    применяется **после** свёртки, а не до. Иначе при сортировке по объёму
+    «лучшей» строкой хаба окажется самая объёмная, а не самая выгодная.
+    """
+    seen: set[str] = set()
+    visible = []
+    for scenario in result.scenarios:
+        if scenario.hub_key in seen:
+            continue
+        seen.add(scenario.hub_key)
+        visible.append(scenario)
+
+    return _apply_visibility(inp, result, history_rows, visible)
+
+
 def _history_last_day(gas: Gas) -> date | None:
     """Последний день истории сделок по этому газу — для чипа в шапке.
 
@@ -308,10 +396,14 @@ def _history_last_day(gas: Gas) -> date | None:
 
 
 def _grid_notes(gas: Gas, book: prices.PriceBook) -> list[str]:
-    """Что сказать пользователю про происхождение и свежесть цен.
+    """Что сказать пользователю, когда с ценами что-то не так.
 
-    Молчать нельзя ни про один из случаев: пустая база, устаревшие данные
-    и хаб без среза выглядят на экране одинаково — пустой ячейкой.
+    Только про проблемы. В обычный день список пуст и под сеткой нет ничего:
+    рассказывать, что всё хорошо, незачем — это видно по самим ценам.
+
+    Молчать нельзя ни про один из оставшихся случаев: недоступная база, пустая
+    база, устаревшие данные и хаб без среза выглядят на экране одинаково —
+    пустой ячейкой, и отличить их человеку иначе не по чему.
     """
     notes: list[str] = []
     missing_forms = [
@@ -340,9 +432,9 @@ def _grid_notes(gas: Gas, book: prices.PriceBook) -> list[str]:
         )
         return notes
 
-    age = book.age()
-    if age is not None:
-        notes.append(f"Цены из базы, собраны {_humanize_age(age)} назад.")
+    # Возраст цен сам по себе не новость — он стоит чипом в шапке. Новость —
+    # что он вышел за порог: значит сбор не отработал (SPEC §4).
+    if book.age() is not None:
         max_age = timedelta(minutes=int(current_app.config["PRICE_MAX_AGE_MINUTES"]))
         if book.is_stale(max_age):
             notes.append(
@@ -363,12 +455,9 @@ def _grid_notes(gas: Gas, book: prices.PriceBook) -> list[str]:
             + ". Стакан там есть, но все ордера вне рынка — по таким ценам не торгуют."
         )
 
-    dropped = sum(stored.dropped for stored in book.quotes.values())
-    if dropped:
-        notes.append(
-            f"Отброшено ордеров вне рынка: {dropped}. Цена считается по тем, "
-            f"по которым реально идут сделки."
-        )
+    # Счётчик отброшенных ордеров убран 22.08.2026: сам по себе он ни о чём
+    # не говорит — отсев мусора идёт всегда и это штатная работа, а не сбой.
+    # Случай, когда отсев съел книгу целиком, остался выше отдельной заметкой.
 
     if book.missing_hubs:
         notes.append(
@@ -539,17 +628,104 @@ def _low_volume_notes(scenario, history: Mapping[str, object] | None) -> list[st
     return notes
 
 
+# --- Сортировка таблицы результата (ROADMAP 16) ---
+#
+# Сортирует сервер: таблицу рисует Jinja, числа считает Python, и второй порядок
+# правды в браузере разъехался бы с полосками, которые считаются от размаха.
+# Колонки, по которым можно сортировать, и подпись каждой — подпись нужна
+# подсказке на кнопке заголовка.
+SORT_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("hub", "хабу"),
+    ("price", "цене"),
+    ("qty", "количеству"),
+    ("volume_m3", "объёму"),
+    ("total", "итогу"),
+    ("isk_per_unit", "ISK за юнит"),
+)
+# Умолчание не меняется: ISK/юнит по возрастанию — это ответ на главный вопрос
+# приложения, и открываться страница обязана с ним.
+SORT_DEFAULT = "isk_per_unit"
+SORT_DIRECTIONS = ("asc", "desc")
+
+
+def _sort_state(form: Mapping[str, str]) -> tuple[str, bool]:
+    """Выбранная колонка и направление из формы.
+
+    Мусор здесь — не ошибка пользователя, а состояние интерфейса: поля скрытые,
+    их пишет наш же JS. Непонятное значение молча заменяется умолчанием, а не
+    роняет расчёт (ROADMAP 16.1).
+    """
+    column = (form.get("sort") or "").strip()
+    if column not in dict(SORT_COLUMNS):
+        column = SORT_DEFAULT
+    direction = (form.get("sort_dir") or "").strip()
+    if direction not in SORT_DIRECTIONS:
+        direction = SORT_DIRECTIONS[0]
+    return column, direction == "desc"
+
+
+def _sort_value(scenario, column: str, hub_order: Mapping[str, int]) -> float | int:
+    """Ключ сортировки одной строки по выбранной колонке.
+
+    Хаб сортируется в порядке `constants.HUBS`, а не по алфавиту: это привычный
+    игроку порядок, и он же используется в сетке цен (ROADMAP 16.0).
+    """
+    if column == "hub":
+        return hub_order.get(scenario.hub_key, len(hub_order))
+    return getattr(scenario, column)
+
+
+def _sorted_for_display(
+    scenarios: Sequence[object], column: str, descending: bool
+) -> list[object]:
+    """Порядок строк на экране. Рейтинг по ISK/юнит от него не зависит.
+
+    Стабилизатор — ISK/юнит по возрастанию, и он всегда по возрастанию: это
+    не выбор пользователя, а способ не дать одинаковым ключам плясать между
+    запросами. Сортировка стабильная, поэтому двух проходов достаточно.
+    """
+    hub_order = {hub.key: index for index, hub in enumerate(catalog.hubs())}
+    rows = sorted(scenarios, key=lambda s: s.isk_per_unit)
+    rows.sort(key=lambda s: _sort_value(s, column, hub_order), reverse=descending)
+    return rows
+
+
+def _sort_headers(column: str, descending: bool) -> dict[str, dict[str, str]]:
+    """Состояние каждого сортируемого заголовка для шаблона.
+
+    `aria` уезжает в `aria-sort` на `<th>` — озвучка обязана знать, по какой
+    колонке идёт порядок. `next` — направление следующего клика: второй клик
+    по той же колонке переворачивает порядок, клик по новой начинает
+    с возрастания (ROADMAP 16.0).
+    """
+    state: dict[str, dict[str, str]] = {}
+    for key, label in SORT_COLUMNS:
+        active = key == column
+        state[key] = {
+            "aria": ("descending" if descending else "ascending") if active else "none",
+            "next": "asc" if (active and descending) or not active else "desc",
+            "title": f"Сортировать по {label}",
+        }
+    return state
+
+
 def _row_view(
     scenario,
-    index: int,
+    rank: int,
+    is_odd: bool,
     history: Mapping[str, object] | None,
     isk_span: tuple[float, float],
     max_daily: float,
 ) -> dict[str, object]:
-    """Одна строка таблицы результата в том виде, в каком её рисует шаблон."""
+    """Одна строка таблицы результата в том виде, в каком её рисует шаблон.
+
+    `rank` — место в порядке по ISK/юнит, а не номер строки на экране: при
+    сортировке по другой колонке это уже разные вещи. `is_odd` — наоборот,
+    чисто экранная величина: полосатость таблицы считается по тому, что видно.
+    """
     min_isk, max_isk = isk_span
     spread = max_isk - min_isk
-    is_best = index == 0
+    is_best = rank == 0
     # Доля строки в размахе ISK/юнит: 0 у лучшей, 1 у худшей
     rel = (scenario.isk_per_unit - min_isk) / spread if spread > 0 else 0.0
 
@@ -624,9 +800,13 @@ def _row_view(
 
     return {
         "scenario": scenario,
-        "rank": index + 1,
+        # Ключ строки — тот же, которым свод истории ищет свою запись. По нему
+        # же панель разбора находит сценарий: пары «хаб + форма + сторона»
+        # в таблице уникальны, изобретать второй ключ незачем (ROADMAP 17.0)
+        "key": _history_row_key(scenario.hub_key, scenario.form, scenario.side),
+        "rank": rank + 1,
         "is_best": is_best,
-        "is_odd": index % 2 == 1,
+        "is_odd": is_odd,
         "history": history,
         # Полоска ISK/юнит: чем дешевле, тем длиннее — лучшая строка самая длинная
         "isk_bar": bar_width(100.0 - rel * ISK_BAR_SPAN_PCT, floor=ISK_BAR_MIN_PCT),
@@ -670,23 +850,50 @@ def _row_view(
 
 
 def _row_views(
-    scenarios: Sequence[object], history_rows: Mapping[str, Mapping[str, object]]
+    scenarios: Sequence[object],
+    history_rows: Mapping[str, Mapping[str, object]],
+    column: str = SORT_DEFAULT,
+    descending: bool = False,
 ) -> list[dict[str, object]]:
-    """Таблица результата целиком: ширины полосок считаются от общего размаха."""
+    """Таблица результата целиком: ширины полосок считаются от общего размаха.
+
+    На вход идут сценарии в порядке по ISK/юнит — это рейтинг, и он же даёт
+    размах для полосок. Сортировка меняет только порядок показа: место
+    в рейтинге, подсветка лучшей строки и `Δ` остаются привязаны к ISK/юнит,
+    а не к первой строке на экране (ROADMAP 16.0).
+    """
     if not scenarios:
         return []
     # Сценарии уже отсортированы по ISK/юнит по возрастанию (calculator)
     isk_span = (scenarios[0].isk_per_unit, scenarios[-1].isk_per_unit)
-    matched = [
-        history_rows.get(_history_row_key(s.hub_key, s.form, s.side)) for s in scenarios
-    ]
+    ranks = {
+        _history_row_key(s.hub_key, s.form, s.side): index
+        for index, s in enumerate(scenarios)
+    }
     max_daily = max(
-        (float(row["daily_volume"]) for row in matched if row is not None), default=0.0
+        (
+            float(row["daily_volume"])
+            for row in history_rows.values()
+            if row is not None
+        ),
+        default=0.0,
     )
-    return [
-        _row_view(scenario, index, history, isk_span, max_daily)
-        for index, (scenario, history) in enumerate(zip(scenarios, matched))
-    ]
+    rows = []
+    for screen_index, scenario in enumerate(
+        _sorted_for_display(scenarios, column, descending)
+    ):
+        key = _history_row_key(scenario.hub_key, scenario.form, scenario.side)
+        rows.append(
+            _row_view(
+                scenario,
+                ranks[key],
+                screen_index % 2 == 1,
+                history_rows.get(key),
+                isk_span,
+                max_daily,
+            )
+        )
+    return rows
 
 
 @bp.get("/")
@@ -742,6 +949,12 @@ def index() -> str:
             else None
         ),
         scenario_slots=scenario_slots(),
+        version=__version__,
+        # Тема вошедшего приезжает готовой в атрибуте <html>: скрипт в <head>
+        # перебивать её не имеет права, иначе тёмная страница мигнёт светлой,
+        # пока браузер читает localStorage (ROADMAP 18.0). У анонима здесь
+        # None — атрибута нет, и тему по-прежнему ставит скрипт.
+        theme=saved.values.get("theme"),
         sso_enabled=settings_or_none() is not None,
         offer_import=session.pop("offer_settings_import", False),
         gases_by_family=gases_by_family,
@@ -863,6 +1076,14 @@ def _parse_form(form) -> tuple[CalcInput | None, dict[str, HubPrices], list[str]
             errors.append(f"«Обеспечение»: не похоже на число: {raw!r}.")
 
     sell_only = form.get("sell_only") is not None
+    buy_only = form.get("buy_only") is not None
+    # Взаимоисключающие фильтры гасят друг друга в settings.js, но форму можно
+    # отправить и без JS. Молчаливое «Недостаточно данных» тут соврало бы:
+    # данные есть, выдачу схлопнули фильтры (ROADMAP 13.0).
+    if sell_only and buy_only:
+        errors.append(
+            "Фильтры „только sell“ и „только buy“ исключают друг друга — снимите один."
+        )
 
     prices: dict[str, HubPrices] = {}
     for hub in catalog.hubs():
@@ -922,6 +1143,7 @@ def _parse_form(form) -> tuple[CalcInput | None, dict[str, HubPrices], list[str]
         broker_fee=broker_fee,
         collateral_pct=collateral_pct,
         sell_only=sell_only,
+        buy_only=buy_only,
     )
     return inp, prices, errors
 
@@ -943,35 +1165,107 @@ def calculate() -> str:
             "partials/results.html", errors=[str(exc)], scenario_slots=scenario_slots()
         )
 
+    # Порядок здесь зафиксирован (ROADMAP 14.1): построить сценарии → взять
+    # по ним историю → отфильтровать показ → пересчитать сводку по видимому →
+    # собрать строки. `_row_views` считает размах ISK и максимальный оборот
+    # по тому, что ему дали: после фильтрации это уже другой размах, и полоски
+    # обязаны рисоваться по видимому, а не по скрытому.
     history_rows = _history_rows(inp.gas, result.scenarios)
+    # Фильтры показа: в CalcInput они не попадают — это не параметры расчёта.
+    hide_illiquid = request.form.get("hide_illiquid") is not None
+    best_per_hub = request.form.get("best_per_hub") is not None
+    hidden_illiquid = 0
+    collapsed_rows = 0
+    if hide_illiquid:
+        result, history_rows, hidden_illiquid = _drop_illiquid(inp, result, history_rows)
+    # Свёртка идёт второй, а не первой (ROADMAP 15.0): иначе хаб мог бы остаться
+    # представленным строкой, которую «скрыть неликвид» потом уберёт, — и хаб
+    # исчез бы целиком, хотя живая альтернатива у него была.
+    if best_per_hub:
+        result, history_rows, collapsed_rows = _best_per_hub(inp, result, history_rows)
+
+    # Сортировка идёт последней — после свёртки, а не до неё (ROADMAP 15.0):
+    # лучшую строку хаба выбирает ISK/юнит независимо от того, по какой колонке
+    # смотрит пользователь. И после `summarize`: `Δ` считается от лучшего
+    # по ISK/юнит, а не от того, что оказалось первым на экране.
+    sort_column, sort_desc = _sort_state(request.form)
+
     return render_template(
         "partials/results.html",
         errors=None,
         result=result,
         inp=inp,
-        rows=_row_views(result.scenarios, history_rows),
+        rows=_row_views(result.scenarios, history_rows, sort_column, sort_desc),
+        sort_headers=_sort_headers(sort_column, sort_desc),
         scenario_slots=scenario_slots(),
+        hide_illiquid=hide_illiquid,
+        hidden_illiquid=hidden_illiquid,
+        best_per_hub=best_per_hub,
+        collapsed_rows=collapsed_rows,
         hub_names={hub.key: hub.name for hub in catalog.hubs()},
         form_labels=FORM_LABELS,
         grid_form_labels=GRID_FORM_LABELS,
-        has_outliers=any(
-            WarningCode.PRICE_OUTLIER in scenario.warnings
-            for scenario in result.scenarios
-        ),
-        has_shallow=any(
-            WarningCode.SHALLOW_BOOK in scenario.warnings
-            for scenario in result.scenarios
-        ),
-        history_rows=history_rows,
-        has_borrowed=any(row["borrowed"] for row in history_rows.values()),
-        has_unconfirmed=any(row["unconfirmed"] for row in history_rows.values()),
-        has_volume_warning=any(
-            row["short_of_volume"] or row["slow_for_volume"] for row in history_rows.values()
-        ),
-        history_last_day=max(
-            (row["last_day"] for row in history_rows.values() if row["last_day"]),
-            default=None,
-        ),
+        # Сводных признаков «в выдаче есть выброс / мелкий стакан / неликвид»
+        # больше нет: их читал список сносок, а он убран. Каждую пометку
+        # объясняет подсказка на значке, легенда под таблицей и панель разбора
+        # строки — с числами именно той строки, а не «где-то в таблице».
+        warning_codes=WarningCode,
+    )
+
+
+@bp.post("/row-detail")
+def row_detail() -> str:
+    """Разбор одной строки таблицы (SPEC §5.8). Ответ — фрагмент для HTMX.
+
+    Считает тем же путём, что и /calculate: разбор формы, ядро, свод истории.
+    Второго экземпляра математики в браузере быть не должно — он разъедется
+    с первым в первый же месяц (ROADMAP 17.0). Пересчёт здесь дешёвый: ESI
+    в нём нет, всё читается из базы.
+
+    Ключ не нашёлся — пустой ответ и 200: значит форма изменилась между кликом
+    и запросом, панель просто не открывается. Показывать тут нечего и ошибки
+    тоже нет.
+    """
+    inp, prices, errors = _parse_form(request.form)
+    if errors:
+        return ""
+
+    try:
+        result = calculator.build_scenarios(inp, prices)
+    except ValueError:
+        return ""
+
+    key = (request.form.get("row") or "").strip()
+    history_rows = _history_rows(inp.gas, result.scenarios)
+    # Строки собираются целиком тем же кодом, что рисует таблицу: числа в панели
+    # обязаны быть теми же самыми, а не посчитанными «примерно так же»
+    row = next((view for view in _row_views(result.scenarios, history_rows) if view["key"] == key), None)
+    if row is None:
+        return ""
+
+    scenario = row["scenario"]
+    hub_prices = prices.get(scenario.hub_key)
+    breakeven = next(
+        (b for b in result.breakevens if b.hub_key == scenario.hub_key), None
+    )
+    # Точки может не быть — тогда надо сказать почему, а не показывать пустоту:
+    # формула сравнивает сжатый с сырым, и обе цены sell по хабу обязательны
+    missing_for_breakeven = [
+        label
+        for suffix, label in (("raw_sell", "сырой sell"), ("compressed_sell", "сжатый sell"))
+        if hub_prices is None or getattr(hub_prices, suffix) is None
+    ]
+
+    return render_template(
+        "partials/row_detail.html",
+        row=row,
+        inp=inp,
+        hub_name=catalog.hub_by_key(scenario.hub_key).name,
+        form_labels=FORM_LABELS,
+        grid_form_labels=GRID_FORM_LABELS,
+        freight_rate=None if hub_prices is None else hub_prices.freight_rate,
+        breakeven=breakeven,
+        missing_for_breakeven=missing_for_breakeven,
         warning_codes=WarningCode,
     )
 

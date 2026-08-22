@@ -5,6 +5,7 @@
 невозможно, и проверяется это на настоящей криптографии, а не на заглушке.
 """
 
+import re
 import time
 from datetime import timedelta
 
@@ -12,6 +13,7 @@ import httpx
 import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
+from sqlalchemy import select
 
 from app import create_app
 from app import routes
@@ -456,6 +458,155 @@ class TestStoredSettings:
         form = {k: v for k, v in self.FORM.items() if k != "sell_only"}
         client.post("/settings/save", data=form)
         assert "checked" not in client.get("/").get_data(as_text=True)
+
+    def test_buy_only_survives_logout(self, client, monkeypatch, make_token):
+        """Соседняя галочка хранится наравне с «только sell».
+
+        Сохраняем без «только sell»: фильтры взаимоисключающие, и держать
+        в базе обе поднятыми значит записать состояние, которого форма
+        не примет.
+        """
+        login(client, monkeypatch, make_token())
+        form = {k: v for k, v in self.FORM.items() if k != "sell_only"}
+        form["buy_only"] = "on"
+        client.post("/settings/save", data=form)
+        html = client.get("/").get_data(as_text=True)
+        assert 'id="buy-only" checked' in html
+        assert 'id="sell-only" checked' not in html
+
+    def test_unchecked_buy_only_stays_unchecked(self, client, monkeypatch, make_token):
+        """Снятая галочка обязана остаться снятой: иначе её не выключить."""
+        login(client, monkeypatch, make_token())
+        form = {k: v for k, v in self.FORM.items() if k != "sell_only"}
+        client.post("/settings/save", data=dict(form, buy_only="on"))
+        client.post("/settings/save", data=form)
+        assert "checked" not in client.get("/").get_data(as_text=True)
+
+    def test_hide_illiquid_survives_logout(self, client, monkeypatch, make_token):
+        """Фильтр показа переезжает между браузерами так же, как фильтры сторон."""
+        login(client, monkeypatch, make_token())
+        form = {k: v for k, v in self.FORM.items() if k != "sell_only"}
+        form["hide_illiquid"] = "on"
+        client.post("/settings/save", data=form)
+        html = client.get("/").get_data(as_text=True)
+        assert 'id="hide-illiquid" checked' in html
+        assert 'id="sell-only" checked' not in html
+
+    def test_unchecked_hide_illiquid_stays_unchecked(self, client, monkeypatch, make_token):
+        """Снятая галочка обязана остаться снятой: иначе её не выключить."""
+        login(client, monkeypatch, make_token())
+        form = {k: v for k, v in self.FORM.items() if k != "sell_only"}
+        client.post("/settings/save", data=dict(form, hide_illiquid="on"))
+        client.post("/settings/save", data=form)
+        assert "checked" not in client.get("/").get_data(as_text=True)
+
+    def test_best_per_hub_survives_logout(self, client, monkeypatch, make_token):
+        """Четвёртая галочка панели переезжает между браузерами так же."""
+        login(client, monkeypatch, make_token())
+        form = {k: v for k, v in self.FORM.items() if k != "sell_only"}
+        form["best_per_hub"] = "on"
+        client.post("/settings/save", data=form)
+        html = client.get("/").get_data(as_text=True)
+        assert 'id="best-per-hub" checked' in html
+        assert 'id="hide-illiquid" checked' not in html
+
+    def test_unchecked_best_per_hub_stays_unchecked(self, client, monkeypatch, make_token):
+        """Снятая галочка обязана остаться снятой: иначе её не выключить."""
+        login(client, monkeypatch, make_token())
+        form = {k: v for k, v in self.FORM.items() if k != "sell_only"}
+        client.post("/settings/save", data=dict(form, best_per_hub="on"))
+        client.post("/settings/save", data=form)
+        assert "checked" not in client.get("/").get_data(as_text=True)
+
+    @staticmethod
+    def hidden_value(html: str, field_id: str) -> str | None:
+        """Значение скрытого поля по его id — не привязываясь к вёрстке."""
+        match = re.search(rf'id="{field_id}"[^>]*?value="([^"]*)"', html, re.S)
+        return match.group(1) if match else None
+
+    def test_sort_survives_logout(self, client, monkeypatch, make_token):
+        """Выбранный порядок таблицы переживает выход и вход."""
+        login(client, monkeypatch, make_token())
+        client.post("/settings/save", data=dict(self.FORM, sort="total", sort_dir="desc"))
+        html = client.get("/").get_data(as_text=True)
+        assert self.hidden_value(html, "sort-column") == "total"
+        assert self.hidden_value(html, "sort-dir") == "desc"
+
+    def test_sort_defaults_when_never_chosen(self, client, monkeypatch, make_token):
+        """Порядок не выбирали — форма открывается на умолчании, а не пустой."""
+        login(client, monkeypatch, make_token())
+        client.post("/settings/save", data=self.FORM)
+        html = client.get("/").get_data(as_text=True)
+        assert self.hidden_value(html, "sort-column") == "isk_per_unit"
+        assert self.hidden_value(html, "sort-dir") == "asc"
+
+
+    def test_theme_travels_to_the_html_tag(self, client, monkeypatch, make_token):
+        """Выбранная тема приезжает атрибутом на <html> — до всякого JS."""
+        login(client, monkeypatch, make_token())
+        client.post("/settings/save", data={"theme": "light"})
+        html = client.get("/").get_data(as_text=True)
+        assert '<html lang="ru" data-theme="light">' in html
+        assert 'aria-pressed="true"' in html
+
+    def test_theme_alone_does_not_wipe_the_rest(self, client, monkeypatch, make_token):
+        """Запрос от кнопки темы состоит из одного поля. Полный save затёр бы
+        им все остальные настройки — ради этого он и разведён с save_theme."""
+        login(client, monkeypatch, make_token())
+        client.post("/settings/save", data=self.FORM)
+        client.post("/settings/save", data={"theme": "light"})
+        html = client.get("/").get_data(as_text=True)
+        assert 'data-theme="light"' in html
+        assert 'value="1.5"' in html            # обеспечение на месте
+        assert 'id="sell-only" checked' in html  # галочка тоже
+
+    def test_settings_save_does_not_wipe_the_theme(self, client, monkeypatch, make_token):
+        """И наоборот: обычное сохранение настроек тему не трогает."""
+        login(client, monkeypatch, make_token())
+        client.post("/settings/save", data={"theme": "light"})
+        client.post("/settings/save", data=self.FORM)
+        assert 'data-theme="light"' in client.get("/").get_data(as_text=True)
+
+    def test_theme_survives_a_browser_without_localstorage(
+        self, client, app, monkeypatch, make_token
+    ):
+        """Другой браузер — другой клиент без localStorage. Тема обязана
+        приехать с сервера: ради этого этап и делался."""
+        login(client, monkeypatch, make_token())
+        client.post("/settings/save", data={"theme": "light"})
+
+        other = app.test_client()
+        login(other, monkeypatch, make_token())
+        assert 'data-theme="light"' in other.get("/").get_data(as_text=True)
+
+    def test_garbage_theme_is_not_stored(self, client, monkeypatch, make_token):
+        """Значение приходит из браузера, значит прийти может что угодно.
+        В базу попадает только то, что мы умеем показать."""
+        login(client, monkeypatch, make_token())
+        response = client.post("/settings/save", data={"theme": "неоновый"})
+        assert response.status_code == 200
+        assert response.get_json() == {"saved": False}
+        html = client.get("/").get_data(as_text=True)
+        assert "data-theme=" not in html[: html.index("<head>")]
+
+    def test_garbage_in_the_column_does_not_break_the_page(
+        self, client, app, monkeypatch, make_token
+    ):
+        """Мусор в колонке — не повод ронять страницу: остаётся тёмная."""
+        login(client, monkeypatch, make_token())
+        client.post("/settings/save", data=self.FORM)
+        with session_scope(app.extensions["db_engine"]) as db:
+            db.scalar(select(UserSettings)).theme = "перламутровый"
+
+        html = client.get("/").get_data(as_text=True)
+        assert "data-theme=" not in html[: html.index("<head>")]
+        assert 'value="1.5"' in html  # остальные настройки не пострадали
+
+    def test_anonymous_theme_is_still_the_browser_s(self, client):
+        """У анонима поведение прежнее: атрибута нет, тему ставит скрипт."""
+        html = client.get("/").get_data(as_text=True)
+        assert "data-theme=" not in html[: html.index("<head>")]
+        assert "gascalc.theme" in html[: html.index("</head>")]
 
     def test_broken_gde_level_falls_back(self, client, app, monkeypatch, make_token):
         """В базе оказалось не число — страница обязана открыться на умолчании."""

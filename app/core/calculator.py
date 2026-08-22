@@ -5,7 +5,7 @@
 """
 
 import math
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from fractions import Fraction
 from statistics import median
@@ -141,6 +141,47 @@ def _outlier_keys(
     return result
 
 
+def summarize(
+    scenarios: Sequence[Scenario], n_units: int, compressed_qty: int
+) -> tuple[tuple[Scenario, ...], Summary | None]:
+    """Сводка над готовым набором сценариев и проставленная в них Δ.
+
+    Отдельной функцией потому, что считать её приходится дважды. Ядро решает,
+    какие сценарии вообще существуют, а интерфейс решает, какие из них
+    показать: фильтр «скрыть неликвид» отбирает строки уже по данным истории
+    сделок, которых ядро не видит и видеть не должно (ROADMAP 14.1). После
+    такого отбора сводка обязана пересчитаться по видимому — иначе «Лучший
+    вариант» покажет строку, которой в таблице нет.
+
+    Вход должен быть уже отсортирован по isk_per_unit по возрастанию: первая
+    строка — лучшая, у неё Δ нет вовсе (прочерк на экране), у остальных Δ
+    считается от неё. Прежние значения delta_pct затираются: после фильтрации
+    они относятся к другой точке отсчёта.
+    """
+    rows = list(scenarios)
+    if not rows:
+        return (), None
+
+    best = replace(rows[0], delta_pct=None)
+    rows[0] = best
+    rows[1:] = [
+        replace(s, delta_pct=(s.isk_per_unit / best.isk_per_unit - 1) * 100)
+        for s in rows[1:]
+    ]
+    worst = rows[-1]
+    has_compressed = any(s.form is GasForm.COMPRESSED for s in rows)
+    loss_units = compressed_qty - n_units if has_compressed else None
+    loss_pct = (compressed_qty - n_units) / compressed_qty * 100 if has_compressed else None
+    summary = Summary(
+        best=best,
+        worst=worst,
+        savings_vs_worst=worst.total - best.total,
+        loss_units=loss_units,
+        loss_pct=loss_pct,
+    )
+    return tuple(rows), summary
+
+
 def build_scenarios(inp: CalcInput, prices_by_hub: Mapping[str, HubPrices]) -> CalcResult:
     """Собирает и сортирует все сценарии закупки (DOMAIN §4).
 
@@ -148,10 +189,17 @@ def build_scenarios(inp: CalcInput, prices_by_hub: Mapping[str, HubPrices]) -> C
     по constants.HUBS). Пустая цена — сценарий пропускается; пустая ставка
     доставки — хаб выпадает целиком и попадает в skipped_hubs.
 
-    При inp.sell_only buy-сценарии не строятся вовсе: сводка и «лучший вариант»
-    считаются по тому, что осталось. Точки безубыточности фильтр не трогает —
-    они и так считаются по sell-ценам.
+    При inp.sell_only buy-сценарии не строятся вовсе, при inp.buy_only —
+    sell-сценарии: сводка и «лучший вариант» считаются по тому, что осталось.
+    Оба флага разом — ValueError: это не пустая выдача, а взаимоисключающие
+    фильтры. Точки безубыточности фильтр не трогает — они и так считаются
+    по sell-ценам.
     """
+    if inp.sell_only and inp.buy_only:
+        raise ValueError(
+            "Фильтры „только sell“ и „только buy“ исключают друг друга — "
+            "снимите один"
+        )
     if inp.broker_fee < 0:
         raise ValueError(f"Брокерская комиссия не может быть отрицательной: {inp.broker_fee}")
     if inp.collateral_pct < 0:
@@ -182,6 +230,8 @@ def build_scenarios(inp: CalcInput, prices_by_hub: Mapping[str, HubPrices]) -> C
         for form, side, field_name in _SCENARIO_FIELDS:
             if inp.sell_only and side is OrderSide.BUY:
                 continue  # фильтр «только sell» (SPEC §5.4)
+            if inp.buy_only and side is OrderSide.SELL:
+                continue  # зеркальный фильтр «только buy» (SPEC §5.4)
             price = getattr(prices, field_name)
             if price is None:
                 continue
@@ -235,26 +285,7 @@ def build_scenarios(inp: CalcInput, prices_by_hub: Mapping[str, HubPrices]) -> C
 
     rows.sort(key=lambda s: s.isk_per_unit)  # сортировка устойчива: при равенстве — порядок хабов
 
-    summary: Summary | None = None
-    if rows:
-        best = rows[0]
-        rows[1:] = [
-            replace(s, delta_pct=(s.isk_per_unit / best.isk_per_unit - 1) * 100)
-            for s in rows[1:]
-        ]
-        worst = rows[-1]
-        has_compressed = any(s.form is GasForm.COMPRESSED for s in rows)
-        loss_units = compressed_qty - inp.n_units if has_compressed else None
-        loss_pct = (
-            (compressed_qty - inp.n_units) / compressed_qty * 100 if has_compressed else None
-        )
-        summary = Summary(
-            best=best,
-            worst=worst,
-            savings_vs_worst=worst.total - best.total,
-            loss_units=loss_units,
-            loss_pct=loss_pct,
-        )
+    scenarios, summary = summarize(rows, inp.n_units, compressed_qty)
 
     breakevens = tuple(
         Breakeven(
@@ -270,7 +301,7 @@ def build_scenarios(inp: CalcInput, prices_by_hub: Mapping[str, HubPrices]) -> C
     return CalcResult(
         eta=eta,
         compressed_qty=compressed_qty,
-        scenarios=tuple(rows),
+        scenarios=scenarios,
         summary=summary,
         breakevens=breakevens,
         skipped_hubs=tuple(skipped),

@@ -252,6 +252,19 @@ class UserSettings(Base):
     broker_fee: Mapped[Decimal | None] = mapped_column(SHARE, default=None)
     collateral_pct: Mapped[Decimal | None] = mapped_column(SHARE, default=None)
     sell_only: Mapped[bool] = mapped_column(default=False)
+    buy_only: Mapped[bool] = mapped_column(default=False)
+    # Фильтр показа, а не расчёта, но хранится наравне с остальными:
+    # разъехавшееся поведение соседних галочек хуже, чем их отсутствие
+    hide_illiquid: Mapped[bool] = mapped_column(default=False)
+    best_per_hub: Mapped[bool] = mapped_column(default=False)
+    # Порядок таблицы: имя колонки и направление. В базе `sort` — слишком
+    # общее имя для колонки, поэтому `sort_column`; в форме поле называется
+    # `sort` и переименовывать его нельзя — это контракт формы.
+    sort_column: Mapped[str | None] = mapped_column(String(16), default=None)
+    sort_dir: Mapped[str | None] = mapped_column(String(4), default=None)
+    # Тема оформления. None — «не выбирал»: умолчание тёмное и держит его
+    # CSS, а не база. Значение проверяется по белому списку при записи.
+    theme: Mapped[str | None] = mapped_column(String(8), default=None)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 

@@ -126,6 +126,16 @@ def save_settings():
     if who is None:
         return {"saved": False, "reason": "не выполнен вход"}, 401
     character_id, _name = who
-    user_settings.save(current_app.extensions["db_engine"], character_id, request.form)
+    engine = current_app.extensions["db_engine"]
+
+    # Кнопка темы шлёт ровно одно поле. Полный save затёр бы им всё остальное:
+    # незаполненное поле он считает стёртым — так работает и сброс настроек
+    # пустой формой. Поэтому запрос из одного поля theme обрабатывается
+    # отдельно и ничего, кроме темы, не касается (ROADMAP 18.1).
+    if len(request.form) == 1 and "theme" in request.form:
+        saved = user_settings.save_theme(engine, character_id, request.form["theme"])
+        return {"saved": saved}, 200
+
+    user_settings.save(engine, character_id, request.form)
     session[OFFER_IMPORT_KEY] = False
     return {"saved": True}, 200

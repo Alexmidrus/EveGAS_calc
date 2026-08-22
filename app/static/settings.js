@@ -6,31 +6,47 @@
   var STORAGE_KEY = "gascalc.settings";
   var THEME_KEY = "gascalc.theme";
 
-  /* Тема живёт отдельно от настроек расчёта: она про этот браузер, а не про
-     то, что считает человек. Первичное применение — в <head>, до отрисовки;
-     здесь только переключение (SPEC §10.3). */
+  /* Вошедший хранит настройки на сервере: браузер может быть чужим или
+     смениться. Аноним остаётся в localStorage — это по-прежнему рабочий режим. */
+  var loggedIn = document.body.hasAttribute("data-character");
+
+  /* Тема. У анонима она про этот браузер и живёт в localStorage; у вошедшего
+     побеждает аккаунт и уезжает в базу, иначе настройка не переезжает между
+     машинами — ровно то, что чинит этап 18. Первичное применение в <head>,
+     до отрисовки; здесь только переключение (SPEC §10.3). */
   var themeButton = document.getElementById("theme-toggle");
   if (themeButton) {
+    /* Кнопка обязана сойтись с тем, что на экране: у анонима атрибут
+       проставил скрипт из <head>, и сервер про его выбор ничего не знал. */
+    themeButton.setAttribute(
+      "aria-pressed",
+      document.documentElement.getAttribute("data-theme") === "light" ? "true" : "false"
+    );
     themeButton.addEventListener("click", function () {
       var root = document.documentElement;
       var next = root.getAttribute("data-theme") === "light" ? "dark" : "light";
       root.setAttribute("data-theme", next);
+      themeButton.setAttribute("aria-pressed", next === "light" ? "true" : "false");
       try { localStorage.setItem(THEME_KEY, next); } catch (e) { /* приватный режим */ }
+      if (!loggedIn) { return; }
+      /* Отдельный запрос с одним полем: общий save затирает незаполненные
+         поля, и полный набор значений тут пришлось бы собирать заново. */
+      fetch("/settings/save", {
+        method: "POST",
+        body: new URLSearchParams({theme: next})
+      }).catch(function () { /* сеть моргнула — тема уже на экране */ });
     });
   }
 
   var form = document.getElementById("calc-form");
   if (!form) { return; }
 
-  /* Вошедший хранит настройки на сервере: браузер может быть чужим или
-     смениться. Аноним остаётся в localStorage — это по-прежнему рабочий режим. */
-  var loggedIn = document.body.hasAttribute("data-character");
-
   /* Сохраняем: ставки доставки, структуру, GDE, брокера, процент обеспечения,
      чекбоксы. Цены НЕ сохраняем — устаревают за минуты. */
   function savedFieldNames() {
     var names = ["structure", "gde_level", "broker_fee", "collateral_pct",
-                 "sell_only"];
+                 "sell_only", "buy_only", "hide_illiquid", "best_per_hub",
+                 "sort", "sort_dir"];
     Array.prototype.forEach.call(form.elements, function (el) {
       if (el.name && /_rate$/.test(el.name)) { names.push(el.name); }
     });
@@ -155,6 +171,41 @@
       /* сеть моргнула — настройки не потеряны, они на экране */
     });
   }
+
+  /* «Только sell» и «только buy» гасят друг друга: вместе они схлопнули бы
+     выдачу в ноль, и сервер ответил бы ошибкой формы. Слушатель стоит раньше
+     сохраняющего, поэтому в localStorage и на сервер уезжает уже разведённая
+     пара. Делегирование на форму — привычка держать слушатели там же. */
+  var SIDE_FILTERS = {sell_only: "buy_only", buy_only: "sell_only"};
+  form.addEventListener("change", function (event) {
+    var el = event.target;
+    if (!el || !el.name || !SIDE_FILTERS.hasOwnProperty(el.name)) { return; }
+    if (!el.checked) { return; }
+    var other = form.elements[SIDE_FILTERS[el.name]];
+    if (other) { other.checked = false; }
+  });
+
+  /* Крестик в панели разбора. Панель живёт внутри блока результата и при любом
+     пересчёте приезжает пустой сама; закрыть её руками — отдельное действие,
+     и оно ничего не пересчитывает. */
+  form.addEventListener("click", function (event) {
+    if (!event.target.closest || !event.target.closest("[data-close-detail]")) { return; }
+    var panel = document.getElementById("row-detail");
+    if (panel) { panel.innerHTML = ""; }
+  });
+
+  /* Клик по заголовку таблицы: сортирует сервер, браузер только записывает
+     выбор в скрытые поля и просит пересчитать. Второй порядок правды в JS
+     разъехался бы с полосками, которые считаются от размаха (SPEC §5.7).
+     Делегирование обязательно: таблицу подменяет HTMX, кнопки в ней новые. */
+  form.addEventListener("click", function (event) {
+    var button = event.target.closest ? event.target.closest("[data-sort]") : null;
+    if (!button || !form.contains(button)) { return; }
+    setField("sort", button.getAttribute("data-sort"));
+    setField("sort_dir", button.getAttribute("data-sort-dir"));
+    if (loggedIn) { saveToServer(); } else { saveSettings(); }
+    window.htmx.trigger(form, "recalc");
+  });
 
   form.addEventListener("change", function () {
     updateEta();

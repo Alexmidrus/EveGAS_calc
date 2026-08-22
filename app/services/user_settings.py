@@ -21,6 +21,11 @@ from app.db import UserAccount, UserFreightRate, UserSettings, session_scope, ut
 # сделать в калькуляторе денег.
 SIMPLE_FIELDS = ("gas", "n_units", "structure", "gde_level", "broker_fee", "collateral_pct")
 
+# Тема хранится наравне с настройками, но полем формы не является: её ставит
+# кнопка в шапке, а не расчёт. Значение приходит из браузера, поэтому в базу
+# попадает только то, что есть в этом списке (ROADMAP 18.1).
+THEMES = ("dark", "light")
+
 
 @dataclass(frozen=True, slots=True)
 class StoredSettings:
@@ -85,6 +90,20 @@ def load(engine: Engine, character_id: int) -> StoredSettings:
             values = {k: _plain(v) for k, v in raw.items() if v is not None}
             if row.sell_only:
                 values["sell_only"] = "on"
+            if row.buy_only:
+                values["buy_only"] = "on"
+            if row.hide_illiquid:
+                values["hide_illiquid"] = "on"
+            if row.best_per_hub:
+                values["best_per_hub"] = "on"
+            if row.sort_column:
+                values["sort"] = row.sort_column
+            if row.sort_dir:
+                values["sort_dir"] = row.sort_dir
+            # Мусор в колонке — не повод ронять страницу: неизвестная тема
+            # читается как «не выбирал», и остаётся тёмная по умолчанию
+            if row.theme in THEMES:
+                values["theme"] = row.theme
 
         rates = session.scalars(
             select(UserFreightRate).where(UserFreightRate.character_id == character_id)
@@ -116,6 +135,14 @@ def save(engine: Engine, character_id: int, form: Mapping[str, str]) -> None:
         row.broker_fee = _decimal(form.get("broker_fee"))
         row.collateral_pct = _decimal(form.get("collateral_pct"))
         row.sell_only = form.get("sell_only") is not None
+        row.buy_only = form.get("buy_only") is not None
+        row.hide_illiquid = form.get("hide_illiquid") is not None
+        row.best_per_hub = form.get("best_per_hub") is not None
+        # Что здесь окажется, решает наш же JS. Проверять значение
+        # на осмысленность — забота чтения: непонятную колонку
+        # routes молча заменяет умолчанием, а не роняет расчёт.
+        row.sort_column = (form.get("sort") or "").strip() or None
+        row.sort_dir = (form.get("sort_dir") or "").strip() or None
         row.updated_at = utcnow()
 
         session.execute(
@@ -134,6 +161,32 @@ def save(engine: Engine, character_id: int, form: Mapping[str, str]) -> None:
                     rate=rate,
                 )
             )
+
+
+def save_theme(engine: Engine, character_id: int, theme: str) -> bool:
+    """Сохраняет только тему, не трогая остальные настройки.
+
+    Отдельной функцией, а не полем в ``save``: ``save`` затирает незаполненные
+    поля, и запрос от кнопки темы — в котором из всей формы есть одно поле —
+    стёр бы человеку всё остальное. Слать вместо этого полный набор значений
+    можно, но ошибиться в нём проще, чем написать отдельный обработчик
+    (ROADMAP 18.1).
+
+    Возвращает False, если тема неизвестна или персонажа нет: в базу попадает
+    только то, что мы умеем показать.
+    """
+    if theme not in THEMES:
+        return False
+    with session_scope(engine) as session:
+        if session.get(UserAccount, character_id) is None:
+            return False  # чужой или удалённый персонаж — молча не сохраняем
+        row = session.get(UserSettings, character_id)
+        if row is None:
+            row = UserSettings(character_id=character_id)
+            session.add(row)
+        row.theme = theme
+        row.updated_at = utcnow()
+    return True
 
 
 def _as_int(raw: str | None) -> int | None:
